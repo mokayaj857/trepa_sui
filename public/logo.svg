@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="wingL" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1a5fb4"/>
+      <stop offset="100%" stop-color="#4DA2FF"/>
+    </linearGradient>
+    <linearGradient id="wingR" x1="100%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#1a5fb4"/>
+      <stop offset="100%" stop-color="#4DA2FF"/>
+    </linearGradient>
+    <linearGradient id="body" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#4DA2FF"/>
+      <stop offset="100%" stop-color="#1a5fb4"/>
+    </linearGradient>
+  </defs>
+  <!-- Left wing -->
+  <path d="M256 240 L120 100 L80 160 L140 220 L100 280 L200 260 Z" fill="url(#wingL)" opacity="0.9"/>
+  <!-- Right wing -->
+  <path d="M256 240 L392 100 L432 160 L372 220 L412 280 L312 260 Z" fill="url(#wingR)" opacity="0.9"/>
+  <!-- Body spine -->
+  <path d="M248 120 L264 120 L260 380 L252 380 Z" fill="url(#body)" rx="4"/>
+  <!-- Head dot -->
+  <circle cx="256" cy="108" r="14" fill="#4DA2FF"/>
+  <!-- Tail accent -->
+  <path d="M240 370 L272 370 L268 400 L244 400 Z" fill="#1a5fb4" opacity="0.7"/>
+</svg>

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { useSeoMeta } from '@unhead/react';
 import { Navbar } from '@/components/layout/Navbar';
 import { Footer } from '@/components/layout/Footer';
@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { parseUserIntent, buildPTBFromIntent, runGuardianChecks, getSeverityBg, useTrepaWallet } from '@/lib/sui';
+import type { ParsedIntent, PTBResult, GuardianReport } from '@/lib/sui';
 import {
   Bot,
   Shield,
@@ -44,28 +46,9 @@ const examples = [
   'Invest 100 USDC into the safest yield on Sui',
   'Stake 50 SUI for maximum rewards',
   'Convert 200 USDC to SUI and stake it all',
+  'Lend 500 USDC for stable yield',
 ];
 
-interface ParsedIntent {
-  goal: string;
-  risk: string;
-  amount: string;
-  strategy: string[];
-}
-
-const mockPTB = [
-  { id: 1, label: 'Convert 100 USDC into SUI', desc: 'Swap via DEX aggregator', type: 'SWAP' },
-  { id: 2, label: 'Stake SUI to earn rewards', desc: 'Delegate to validator', type: 'STAKE' },
-  { id: 3, label: 'Store staking position', desc: 'Mint stakedSUI receipt', type: 'DEPOSIT' },
-];
-
-const mockRisks = [
-  { id: '1', severity: 'high' as const, title: 'High Slippage', desc: 'Swap may lose ~7.4% due to limited liquidity.', detail: 'Expected slippage: 7.4%' },
-  { id: '2', severity: 'medium' as const, title: 'Concentration Risk', desc: '100% allocation to a single asset.', detail: 'Allocation: 100% SUI' },
-  { id: '3', severity: 'low' as const, title: 'Stale Pool', desc: 'Low recent activity, additional execution risk.', detail: 'Pool activity: very low' },
-];
-
-/* ─── animated panel wrapper ─── */
 function Panel({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <div className={cn('animate-in fade-in-0 slide-in-from-bottom-3 duration-400', className)}>
@@ -77,18 +60,23 @@ function Panel({ children, className }: { children: React.ReactNode; className?:
 export default function IntentEngine() {
   useSeoMeta({
     title: 'Intent Engine — Trepa',
-    description: 'Describe a financial goal and watch Trepa translate it into an executable Sui PTB with risk analysis.',
+    description: 'Describe a financial goal and Trepa translates it into an executable Sui PTB with risk analysis.',
   });
+
+  const wallet = useTrepaWallet();
+  const isDemoMode = !wallet.isConnected;
 
   const [step, setStep] = useState<Step>('input');
   const [input, setInput] = useState('');
   const [parsed, setParsed] = useState<ParsedIntent | null>(null);
-  const [risks, setRisks] = useState<typeof mockRisks>([]);
+  const [ptbResult, setPtbResult] = useState<PTBResult | null>(null);
+  const [guardianReport, setGuardianReport] = useState<GuardianReport | null>(null);
   const [progress, setProgress] = useState(0);
   const [execStep, setExecStep] = useState(0);
+  const [execDigest, setExecDigest] = useState('');
+  const [execError, setExecError] = useState('');
 
   const activeStepIdx = stepIndexMap[step];
-
   const flowSteps = STEPS.map((s, i) => ({
     ...s,
     active: i === activeStepIdx,
@@ -99,57 +87,94 @@ export default function IntentEngine() {
     setStep('input');
     setInput('');
     setParsed(null);
-    setRisks([]);
+    setPtbResult(null);
+    setGuardianReport(null);
     setProgress(0);
     setExecStep(0);
+    setExecDigest('');
+    setExecError('');
   }, []);
 
+  // Step 1: Parse the user's intent
   const parse = useCallback(() => {
     if (!input.trim()) return;
     setStep('parsing');
     setProgress(0);
-    const iv = setInterval(() => setProgress(p => { if (p >= 100) { clearInterval(iv); return 100; } return p + 4; }), 40);
+    const iv = setInterval(() => setProgress(p => {
+      if (p >= 100) { clearInterval(iv); return 100; }
+      return p + 5;
+    }), 40);
     setTimeout(() => {
       clearInterval(iv);
       setProgress(100);
-      const amt = input.match(/\d+/)?.[0] ?? '100';
-      const low = /safe|low|conservative/i.test(input);
-      const high = /high|max|aggressive/i.test(input);
-      setParsed({
-        goal: /stake/i.test(input) ? 'Stake for Rewards' : 'Generate Yield',
-        risk: high ? 'High' : low ? 'Low' : 'Medium',
-        amount: `${amt} ${/sui/i.test(input) && !/usdc/i.test(input) ? 'SUI' : 'USDC'}`,
-        strategy: /convert|swap/i.test(input)
-          ? ['Swap USDC → SUI', 'Stake SUI', 'Deposit into Yield']
-          : /stake/i.test(input) && !/usdc/i.test(input)
-          ? ['Stake SUI', 'Earn Rewards', 'Reinvest']
-          : ['Swap USDC → SUI', 'Stake SUI', 'Mint Position'],
-      });
+      const result = parseUserIntent(input);
+      setParsed(result);
       setStep('parsed');
-    }, 1500);
+    }, 1200);
   }, [input]);
 
+  // Step 2: Build PTB from intent
   const genPTB = useCallback(() => {
+    if (!parsed) return;
     setStep('ptb-gen');
-    setTimeout(() => setStep('ptb'), 1200);
-  }, []);
+    setTimeout(() => {
+      const result = buildPTBFromIntent(parsed);
+      setPtbResult(result);
+      setStep('ptb');
+    }, 1000);
+  }, [parsed]);
 
+  // Step 3: Run Guardian checks
   const runGuardian = useCallback(() => {
+    if (!ptbResult || !parsed) return;
     setStep('guardian');
-    setTimeout(() => setRisks(mockRisks), 600);
-  }, []);
+    setTimeout(() => {
+      const report = runGuardianChecks(ptbResult.actions, parsed);
+      setGuardianReport(report);
+    }, 600);
+  }, [ptbResult, parsed]);
 
-  const approve = useCallback(() => {
-    setStep('executing');
-    setExecStep(0);
-    const iv = setInterval(() => {
-      setExecStep(p => {
+  // Step 4: Confirm & Execute
+  const approve = useCallback(async () => {
+    if (!ptbResult) return;
+
+    if (wallet.isConnected) {
+      // Real execution via wallet
+      setStep('executing');
+      setExecStep(0);
+      const iv = setInterval(() => setExecStep(p => p < 3 ? p + 1 : 3), 500);
+
+      try {
+        const result = await wallet.executePTB(ptbResult.ptb);
+        clearInterval(iv);
+        setExecStep(3);
+        if (result.success) {
+          setExecDigest(result.digest);
+          setTimeout(() => setStep('done'), 800);
+        } else {
+          setExecError(result.error || 'Transaction failed');
+          setTimeout(() => setStep('done'), 800);
+        }
+      } catch (err) {
+        clearInterval(iv);
+        setExecError(err instanceof Error ? err.message : 'Execution failed');
+        setExecStep(3);
+        setTimeout(() => setStep('done'), 800);
+      }
+    } else {
+      // Demo mode — simulate execution
+      setStep('executing');
+      setExecStep(0);
+      const iv = setInterval(() => setExecStep(p => {
         if (p >= 3) { clearInterval(iv); return 3; }
         return p + 1;
-      });
-    }, 700);
-    setTimeout(() => setStep('done'), 3200);
-  }, []);
+      }), 700);
+      setTimeout(() => {
+        setExecDigest('0x' + Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('') + '...');
+        setStep('done');
+      }, 3200);
+    }
+  }, [ptbResult, wallet]);
 
   return (
     <div className="min-h-screen bg-background transition-theme">
@@ -163,7 +188,18 @@ export default function IntentEngine() {
           </div>
         </div>
 
+        {/* Demo mode banner */}
+        {isDemoMode && step === 'input' && (
+          <div className="border-b border-primary/20 bg-primary/5">
+            <div className="container max-w-2xl py-2.5 flex items-center gap-2 text-xs text-muted-foreground">
+              <Wallet className="h-3.5 w-3.5 text-primary" />
+              <span>Connect a Sui wallet for on-chain execution, or try the demo mode below.</span>
+            </div>
+          </div>
+        )}
+
         <div className="container max-w-2xl py-8 space-y-0">
+
           {/* ─── INPUT ─── */}
           {step === 'input' && (
             <Panel>
@@ -232,8 +268,8 @@ export default function IntentEngine() {
                   <div className="grid grid-cols-3 gap-2">
                     {[
                       ['Goal', parsed.goal],
-                      ['Risk', parsed.risk],
-                      ['Amount', parsed.amount],
+                      ['Risk', parsed.riskLevel],
+                      ['Amount', `${parsed.amount} ${parsed.token}`],
                     ].map(([l, v]) => (
                       <div key={l} className="rounded-md bg-muted/50 p-3 transition-theme">
                         <div className="text-[10px] text-muted-foreground uppercase">{l}</div>
@@ -241,7 +277,7 @@ export default function IntentEngine() {
                       </div>
                     ))}
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
                     {parsed.strategy.map((s, i) => (
                       <span key={i} className="flex items-center gap-1.5">
                         {i > 0 && <ChevronRight className="h-3 w-3" />}
@@ -264,14 +300,14 @@ export default function IntentEngine() {
               <Card className="transition-theme">
                 <CardContent className="p-8 flex flex-col items-center gap-3">
                   <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                  <p className="text-sm text-muted-foreground">Compiling PTB...</p>
+                  <p className="text-sm text-muted-foreground">Compiling PTB from strategy...</p>
                 </CardContent>
               </Card>
             </Panel>
           )}
 
           {/* ─── PTB PREVIEW ─── */}
-          {step === 'ptb' && (
+          {step === 'ptb' && ptbResult && (
             <Panel>
               <Card className="transition-theme">
                 <CardContent className="p-6 space-y-4">
@@ -280,20 +316,25 @@ export default function IntentEngine() {
                     Execution Plan
                   </h2>
                   <div className="space-y-2">
-                    {mockPTB.map(a => (
-                      <div key={a.id} className="flex items-center gap-3 p-3 rounded-md bg-muted/50 transition-theme">
-                        <span className="h-6 w-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold">{a.id}</span>
+                    {ptbResult.actions.map(a => (
+                      <div key={`${a.type}-${a.label}`} className="flex items-center gap-3 p-3 rounded-md bg-muted/50 transition-theme">
+                        <span className="h-6 w-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold">
+                          {a.type === 'swap' ? '⇄' : a.type === 'stake' ? '◎' : a.type === 'lend' ? '↗' : '◆'}
+                        </span>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium">{a.label}</p>
-                          <p className="text-[11px] text-muted-foreground">{a.desc}</p>
+                          <p className="text-[11px] text-muted-foreground">{a.description}</p>
                         </div>
-                        <span className="text-[10px] font-medium text-primary bg-primary/10 px-1.5 py-0.5 rounded">{a.type}</span>
+                        <span className="text-[10px] font-medium text-primary bg-primary/10 px-1.5 py-0.5 rounded">{a.type.toUpperCase()}</span>
                       </div>
                     ))}
                   </div>
-                  <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-primary/10 text-primary text-xs font-medium w-fit">
-                    <TrendingUp className="h-3 w-3" />
-                    Est. Yield: 6.2% APR
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="flex items-center gap-1 px-2 py-1 rounded bg-primary/10 text-primary font-medium">
+                      <TrendingUp className="h-3 w-3" />
+                      Est. Yield: {ptbResult.estimatedYield} APR
+                    </span>
+                    <span className="text-muted-foreground">Gas: {ptbResult.estimatedGas}</span>
                   </div>
                   <Button onClick={runGuardian} className="w-full bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-150">
                     <Shield className="mr-1.5 h-4 w-4" />
@@ -313,51 +354,62 @@ export default function IntentEngine() {
                     <Shield className="h-5 w-5 text-primary" />
                     Guardian Risk Analysis
                   </h2>
-                  {risks.length === 0 ? (
+                  {!guardianReport ? (
                     <div className="flex flex-col items-center gap-2 py-4">
                       <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                      <p className="text-xs text-muted-foreground">Inspecting PTB...</p>
+                      <p className="text-xs text-muted-foreground">Inspecting PTB for risks...</p>
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      {risks.map((r, i) => (
-                        <div
-                          key={r.id}
-                          className={cn(
-                            'rounded-md p-3 animate-in fade-in-0 slide-in-from-left-2 duration-300',
-                            r.severity === 'high' && 'bg-destructive/10',
-                            r.severity === 'medium' && 'bg-primary/10',
-                            r.severity === 'low' && 'bg-muted/60',
-                          )}
-                          style={{ animationDelay: `${i * 100}ms`, animationFillMode: 'backwards' }}
-                        >
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <AlertTriangle className={cn(
-                              'h-3.5 w-3.5',
-                              r.severity === 'high' && 'text-destructive',
-                              r.severity === 'medium' && 'text-primary',
-                              r.severity === 'low' && 'text-muted-foreground',
-                            )} />
-                            <span className={cn(
-                              'text-xs font-semibold',
-                              r.severity === 'high' && 'text-destructive',
-                              r.severity === 'medium' && 'text-primary',
-                              r.severity === 'low' && 'text-muted-foreground',
-                            )}>
-                              {r.title}
-                            </span>
-                            <span className="text-[10px] text-muted-foreground ml-auto">{r.detail}</span>
+                    <>
+                      <div className="space-y-2">
+                        {guardianReport.checks.map((check, i) => (
+                          <div
+                            key={check.id}
+                            className={cn(
+                              'rounded-md p-3 animate-in fade-in-0 slide-in-from-left-2 duration-300',
+                              getSeverityBg(check.severity),
+                            )}
+                            style={{ animationDelay: `${i * 100}ms`, animationFillMode: 'backwards' }}
+                          >
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <AlertTriangle className={cn(
+                                'h-3.5 w-3.5',
+                                check.severity === 'high' && 'text-destructive',
+                                check.severity === 'medium' && 'text-primary',
+                                check.severity === 'low' && 'text-muted-foreground',
+                              )} />
+                              <span className={cn(
+                                'text-xs font-semibold',
+                                check.severity === 'high' && 'text-destructive',
+                                check.severity === 'medium' && 'text-primary',
+                                check.severity === 'low' && 'text-muted-foreground',
+                              )}>
+                                {check.title}
+                              </span>
+                              <span className="text-[10px] text-muted-foreground ml-auto">{check.detail}</span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground ml-5.5">{check.description}</p>
+                            {check.recommendation && (
+                              <p className="text-[10px] text-primary mt-1 ml-5.5">→ {check.recommendation}</p>
+                            )}
                           </div>
-                          <p className="text-[11px] text-muted-foreground ml-5.5">{r.desc}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {risks.length > 0 && (
-                    <Button onClick={() => setStep('confirm')} className="w-full bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-150">
-                      <Lock className="mr-1.5 h-4 w-4" />
-                      Review & Confirm
-                    </Button>
+                        ))}
+                      </div>
+                      <div className={cn(
+                        'rounded-md p-2.5 text-xs font-medium text-center',
+                        guardianReport.overallRisk === 'low' ? 'bg-primary/10 text-primary' : 'bg-destructive/10 text-destructive',
+                      )}>
+                        {guardianReport.summary}
+                      </div>
+                      <Button
+                        onClick={() => setStep('confirm')}
+                        disabled={!guardianReport.canProceed}
+                        className="w-full bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-150"
+                      >
+                        <Lock className="mr-1.5 h-4 w-4" />
+                        Review & Confirm
+                      </Button>
+                    </>
                   )}
                 </CardContent>
               </Card>
@@ -365,7 +417,7 @@ export default function IntentEngine() {
           )}
 
           {/* ─── CONFIRM ─── */}
-          {step === 'confirm' && parsed && (
+          {step === 'confirm' && parsed && ptbResult && guardianReport && (
             <Panel>
               <Card className="transition-theme">
                 <CardContent className="p-6 space-y-4">
@@ -376,10 +428,11 @@ export default function IntentEngine() {
                   <div className="rounded-md bg-muted/50 divide-y divide-border/40 transition-theme">
                     {[
                       ['Goal', parsed.goal],
-                      ['Amount', parsed.amount],
-                      ['Actions', mockPTB.map(a => a.label).join(' → ')],
-                      ['Risks', risks.map(r => r.title).join(', ')],
-                      ['Est. Yield', '6.2% APR'],
+                      ['Amount', `${parsed.amount} ${parsed.token}`],
+                      ['Actions', ptbResult.actions.map(a => a.label).join(' → ')],
+                      ['Risks', guardianReport.checks.filter(c => c.severity !== 'low').map(c => c.title).join(', ') || 'None'],
+                      ['Est. Yield', `${ptbResult.estimatedYield} APR`],
+                      ['Mode', wallet.isConnected ? 'On-Chain (Wallet)' : 'Demo'],
                     ].map(([l, v]) => (
                       <div key={l} className="flex justify-between items-center px-4 py-2.5">
                         <span className="text-xs text-muted-foreground">{l}</span>
@@ -387,10 +440,18 @@ export default function IntentEngine() {
                       </div>
                     ))}
                   </div>
-                  <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
-                    <AlertTriangle className="h-3 w-3 text-destructive flex-shrink-0" />
-                    By approving, you acknowledge the risks. This action cannot be undone once executed on-chain.
-                  </p>
+                  {!wallet.isConnected && (
+                    <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                      <Wallet className="h-3 w-3 text-primary flex-shrink-0" />
+                      No wallet connected — this will simulate execution. Connect a wallet for on-chain execution.
+                    </p>
+                  )}
+                  {guardianReport.checks.filter(c => c.severity === 'high' || c.severity === 'medium').length > 0 && (
+                    <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                      <AlertTriangle className="h-3 w-3 text-destructive flex-shrink-0" />
+                      By approving, you acknowledge the risks listed above. This action cannot be undone.
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <Button variant="outline" onClick={reset} className="active:scale-[0.97] transition-all duration-150">
                       <XCircle className="mr-1.5 h-4 w-4" />
@@ -413,9 +474,9 @@ export default function IntentEngine() {
                 <CardContent className="p-6 space-y-3">
                   <h2 className="font-display font-semibold flex items-center gap-2">
                     <Zap className="h-5 w-5 text-primary animate-pulse" />
-                    Executing PTB...
+                    {wallet.isConnected ? 'Executing PTB on-chain...' : 'Simulating execution...'}
                   </h2>
-                  {['PTB Signed', 'Swap Executed', 'Stake Executed', 'Deposit Complete'].map((label, i) => (
+                  {['PTB Signed', 'Transaction Submitted', 'Waiting for Finality', 'Confirmed'].map((label, i) => (
                     <div
                       key={i}
                       className={cn(
@@ -431,6 +492,9 @@ export default function IntentEngine() {
                       {label}
                     </div>
                   ))}
+                  {wallet.isExecuting && (
+                    <Loader2 className="h-4 w-4 animate-spin text-primary mt-2" />
+                  )}
                 </CardContent>
               </Card>
             </Panel>
@@ -440,68 +504,84 @@ export default function IntentEngine() {
           {step === 'done' && (
             <Panel>
               <div className="space-y-4">
-                <Card className="border-primary/20 transition-theme">
+                <Card className={cn('transition-theme', !execError && 'border-primary/20')}>
                   <CardContent className="p-6 flex flex-col items-center gap-3 text-center">
                     <div className="h-14 w-14 rounded-full bg-primary/10 flex items-center justify-center">
-                      <CheckCircle2 className="h-7 w-7 text-primary" />
+                      {execError ? (
+                        <XCircle className="h-7 w-7 text-destructive" />
+                      ) : (
+                        <CheckCircle2 className="h-7 w-7 text-primary" />
+                      )}
                     </div>
-                    <h2 className="font-display font-bold text-xl">Transaction Complete</h2>
-                    <p className="text-xs text-muted-foreground">PTB executed on Sui</p>
-                    <div className="w-full rounded-md bg-muted/50 divide-y divide-border/40 mt-2 transition-theme">
-                      <div className="flex justify-between items-center px-4 py-2">
-                        <span className="text-xs text-muted-foreground">Digest</span>
-                        <span className="text-xs font-mono text-primary">0xA3f2...8b9c</span>
-                      </div>
-                      <div className="flex justify-between items-center px-4 py-2">
-                        <span className="text-xs text-muted-foreground">Gas</span>
-                        <span className="text-xs">0.002 SUI</span>
-                      </div>
-                      <div className="flex justify-between items-center px-4 py-2">
-                        <span className="text-xs text-muted-foreground">Status</span>
-                        <span className="text-xs font-semibold text-primary">SUCCESS</span>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="transition-theme">
-                  <CardContent className="p-6">
-                    <h3 className="font-display font-semibold text-sm flex items-center gap-2 mb-3">
-                      <Landmark className="h-4 w-4 text-primary" />
-                      Treasury Integration
-                    </h3>
-                    <div className="grid grid-cols-3 gap-2">
-                      {[
-                        { icon: <Wallet className="h-4 w-4" />, label: 'Fees', value: '0.05 SUI' },
-                        { icon: <TrendingUp className="h-4 w-4" />, label: 'Yield', value: '6.2% APR' },
-                        { icon: <Landmark className="h-4 w-4" />, label: 'Treasury', value: '+0.12 SUI' },
-                      ].map(item => (
-                        <div key={item.label} className="text-center p-2 rounded-md bg-muted/50 transition-theme">
-                          <div className="text-primary flex justify-center mb-1">{item.icon}</div>
-                          <div className="text-[10px] text-muted-foreground">{item.label}</div>
-                          <div className="text-xs font-bold font-display">{item.value}</div>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-[11px] text-muted-foreground mt-3">
-                      <span className="font-semibold text-primary">Chrysalis Model:</span> Yield flows into the protected treasury. Principal is ringfenced — only yield funds future operations.
+                    <h2 className="font-display font-bold text-xl">
+                      {execError ? 'Transaction Failed' : 'Transaction Complete'}
+                    </h2>
+                    <p className="text-xs text-muted-foreground">
+                      {execError ? execError : wallet.isConnected ? 'PTB executed on Sui' : 'Demo execution complete'}
                     </p>
+                    {!execError && (
+                      <div className="w-full rounded-md bg-muted/50 divide-y divide-border/40 mt-2 transition-theme">
+                        <div className="flex justify-between items-center px-4 py-2">
+                          <span className="text-xs text-muted-foreground">Digest</span>
+                          <span className="text-xs font-mono text-primary">{execDigest || '0xA3f2...8b9c'}</span>
+                        </div>
+                        <div className="flex justify-between items-center px-4 py-2">
+                          <span className="text-xs text-muted-foreground">Gas</span>
+                          <span className="text-xs">{ptbResult?.estimatedGas ?? '~0.002 SUI'}</span>
+                        </div>
+                        <div className="flex justify-between items-center px-4 py-2">
+                          <span className="text-xs text-muted-foreground">Status</span>
+                          <span className={cn('text-xs font-semibold', execError ? 'text-destructive' : 'text-primary')}>
+                            {execError ? 'FAILED' : 'SUCCESS'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
 
-                <Card className="transition-theme">
-                  <CardContent className="p-5">
-                    <h4 className="text-xs font-semibold mb-2">Self-Funding Loop Activated</h4>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {['Research', 'AI Inference', 'Monitoring', 'Data', 'Reports', 'Operations'].map(item => (
-                        <div key={item} className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-muted/50 transition-theme">
-                          <div className="h-1.5 w-1.5 rounded-full bg-primary" />
-                          <span className="text-[10px] text-muted-foreground">{item}</span>
+                {!execError && (
+                  <>
+                    <Card className="transition-theme">
+                      <CardContent className="p-6">
+                        <h3 className="font-display font-semibold text-sm flex items-center gap-2 mb-3">
+                          <Landmark className="h-4 w-4 text-primary" />
+                          Treasury Integration
+                        </h3>
+                        <div className="grid grid-cols-3 gap-2">
+                          {[
+                            { icon: <Wallet className="h-4 w-4" />, label: 'Fees', value: `${(parseFloat(parsed?.amount ?? '0') * 0.005).toFixed(4)} SUI` },
+                            { icon: <TrendingUp className="h-4 w-4" />, label: 'Yield', value: `${ptbResult?.estimatedYield ?? '6.2%'} APR` },
+                            { icon: <Landmark className="h-4 w-4" />, label: 'Treasury', value: `+${(parseFloat(parsed?.amount ?? '0') * 0.005).toFixed(4)} SUI` },
+                          ].map(item => (
+                            <div key={item.label} className="text-center p-2 rounded-md bg-muted/50 transition-theme">
+                              <div className="text-primary flex justify-center mb-1">{item.icon}</div>
+                              <div className="text-[10px] text-muted-foreground">{item.label}</div>
+                              <div className="text-xs font-bold font-display">{item.value}</div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
+                        <p className="text-[11px] text-muted-foreground mt-3">
+                          <span className="font-semibold text-primary">Chrysalis Model:</span> Yield flows into the protected treasury. Principal is ringfenced — only yield funds future operations.
+                        </p>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="transition-theme">
+                      <CardContent className="p-5">
+                        <h4 className="text-xs font-semibold mb-2">Self-Funding Loop Activated</h4>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {['Research', 'AI Inference', 'Monitoring', 'Data', 'Reports', 'Operations'].map(item => (
+                            <div key={item} className="flex items-center gap-1.5 px-2 py-1.5 rounded bg-muted/50 transition-theme">
+                              <div className="h-1.5 w-1.5 rounded-full bg-primary" />
+                              <span className="text-[10px] text-muted-foreground">{item}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </>
+                )}
 
                 <Button variant="outline" onClick={reset} className="w-full active:scale-[0.98] transition-all duration-150">
                   <RotateCcw className="mr-1.5 h-4 w-4" />
