@@ -2,339 +2,286 @@ import { useSeoMeta } from '@unhead/react';
 import { Link } from 'react-router-dom';
 import { Navbar } from '@/components/layout/Navbar';
 import { Footer } from '@/components/layout/Footer';
-import { FlowVisualization } from '@/components/flow/FlowVisualization';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 import {
   ArrowRight,
   Shield,
   Bot,
   Zap,
   Landmark,
-  ChevronRight,
-  Sparkles,
-  Layers,
   Lock,
+  Layers,
+  ChevronRight,
 } from 'lucide-react';
+import { FlowVisualization } from '@/components/flow/FlowVisualization';
+import { useEffect, useState } from 'react';
+
+/* ─── animated counter hook ─── */
+function useCounter(end: number, duration = 2000, startOnMount = false) {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!startOnMount) return;
+    let raf: number;
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min((now - start) / duration, 1);
+      setCount(Math.round(t * end));
+      if (t < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [end, duration, startOnMount]);
+  return count;
+}
+
+/* ─── flow steps data ─── */
+const flowStepsData = [
+  { id: 'intent', label: 'Intent', icon: <Bot className="h-4 w-4" /> },
+  { id: 'ptb', label: 'PTB', icon: <Layers className="h-4 w-4" /> },
+  { id: 'guardian', label: 'Guardian', icon: <Shield className="h-4 w-4" /> },
+  { id: 'confirm', label: 'Confirm', icon: <Lock className="h-4 w-4" /> },
+  { id: 'execute', label: 'Execute', icon: <Zap className="h-4 w-4" /> },
+  { id: 'treasury', label: 'Treasury', icon: <Landmark className="h-4 w-4" /> },
+];
 
 export default function Index() {
   useSeoMeta({
     title: 'Trepa — The First Self-Funding Intent Engine on Sui',
-    description: 'Describe a financial goal. Trepa translates it into executable Sui transactions, analyzes risks in plain English, waits for your approval, then executes and grows its treasury through autonomous yield generation.',
+    description: 'Describe a financial goal. Trepa translates it into executable Sui transactions, analyzes risks, requires your approval, then executes and grows its treasury through autonomous yield.',
   });
 
+  const [heroVisible, setHeroVisible] = useState(false);
+  const [flowActive, setFlowActive] = useState(0);
+  const stepsCounter = useCounter(6, 1500, heroVisible);
+  const risksCounter = useCounter(3, 1200, heroVisible);
+
+  useEffect(() => {
+    setHeroVisible(true);
+  }, []);
+
+  /* auto-advance flow demo */
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setFlowActive(prev => (prev + 1) % (flowStepsData.length + 1));
+    }, 1200);
+    return () => clearInterval(iv);
+  }, []);
+
+  const flowSteps = flowStepsData.map((s, i) => ({
+    ...s,
+    active: i === flowActive,
+    done: i < flowActive,
+  }));
+
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background transition-theme">
       <Navbar />
 
-      {/* Hero Section */}
-      <section className="relative pt-32 pb-20 overflow-hidden">
-        {/* Background effects */}
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-sui/5 rounded-full blur-[128px]" />
-          <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-trepa/5 rounded-full blur-[128px]" />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-yield/3 rounded-full blur-[200px]" />
-        </div>
-
-        <div className="container relative z-10">
-          <div className="max-w-4xl mx-auto text-center">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-sui/10 border border-sui/20 text-sui text-xs font-medium mb-8 animate-fade-in">
-              <Sparkles className="h-3.5 w-3.5" />
-              Built on Sui with Programmable Transaction Blocks
+      {/* ─── Hero ─── */}
+      <section className="pt-28 pb-16 sm:pt-36 sm:pb-24">
+        <div className="container max-w-3xl">
+          <div
+            className={cn(
+              'transition-all duration-700 ease-out',
+              heroVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6',
+            )}
+          >
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium mb-6">
+              <Zap className="h-3 w-3" />
+              Built on Sui
             </div>
 
-            <h1 className="font-display text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1] mb-6 animate-slide-up">
+            <h1 className="font-display text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.1] mb-5">
               Describe a goal.
               <br />
-              <span className="gradient-text">Trepa executes it.</span>
+              <span className="text-primary">Trepa executes it.</span>
             </h1>
 
-            <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-10 text-balance animate-slide-up" style={{ animationDelay: '0.1s' }}>
-              The first self-funding intent engine on Sui. Convert plain-English financial
-              goals into executable PTBs, understand every risk before you approve, and
-              watch your treasury grow autonomously.
+            <p className="text-base sm:text-lg text-muted-foreground max-w-xl mb-8 leading-relaxed">
+              The first self-funding intent engine on Sui. Plain-English goals become
+              executable PTBs with risk analysis, user approval, and autonomous treasury growth.
             </p>
 
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 animate-slide-up" style={{ animationDelay: '0.2s' }}>
+            <div className="flex items-center gap-3">
               <Link to="/engine">
-                <Button size="lg" className="gradient-sui text-white font-semibold px-8 h-12 glow-sui hover:opacity-90 transition-opacity">
-                  Try the Intent Engine
-                  <ArrowRight className="ml-2 h-4 w-4" />
+                <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.97] transition-all duration-150">
+                  Try the Engine
+                  <ArrowRight className="ml-1.5 h-4 w-4" />
                 </Button>
               </Link>
               <Link to="/treasury">
-                <Button variant="outline" size="lg" className="px-8 h-12 border-border/50">
-                  View Treasury
-                  <ChevronRight className="ml-1 h-4 w-4" />
+                <Button variant="outline" size="lg" className="transition-all duration-150">
+                  Treasury
+                  <ChevronRight className="ml-0.5 h-3.5 w-3.5" />
                 </Button>
               </Link>
             </div>
           </div>
 
-          {/* Flow Visualization */}
-          <div className="mt-20 max-w-5xl mx-auto animate-slide-up" style={{ animationDelay: '0.3s' }}>
-            <div className="text-center mb-8">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">The Required Flow</span>
-            </div>
-            <FlowVisualization />
+          {/* Stats */}
+          <div
+            className={cn(
+              'grid grid-cols-3 gap-4 mt-14 transition-all duration-700 delay-300',
+              heroVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4',
+            )}
+          >
+            {[
+              { label: 'Flow Steps', value: stepsCounter },
+              { label: 'Risk Checks', value: risksCounter },
+              { label: 'Human Approval', value: 'Required' },
+            ].map(stat => (
+              <div key={stat.label} className="text-center">
+                <div className="font-display text-2xl sm:text-3xl font-bold text-foreground">
+                  {typeof stat.value === 'number' ? stat.value : stat.value}
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">{stat.label}</div>
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* Example Journey Section */}
-      <section className="py-20 relative">
-        <div className="container">
-          <div className="text-center mb-12">
-            <h2 className="font-display text-3xl sm:text-4xl font-bold mb-4">
-              See it in action
-            </h2>
-            <p className="text-muted-foreground max-w-xl mx-auto">
-              A user simply describes a financial goal. Trepa handles everything else.
-            </p>
-          </div>
-
-          <div className="max-w-3xl mx-auto">
-            <Card className="border-sui/20 bg-sui/5 overflow-hidden">
-              <CardContent className="p-0">
-                {/* User Input */}
-                <div className="p-6 border-b border-border/30">
-                  <div className="flex items-start gap-3">
-                    <div className="h-8 w-8 rounded-full bg-sui/20 flex items-center justify-center flex-shrink-0">
-                      <span className="text-sui text-xs font-bold">U</span>
-                    </div>
-                    <div className="flex-1">
-                      <span className="text-xs text-muted-foreground mb-1 block">User Intent</span>
-                      <p className="text-foreground font-medium">
-                        "Invest 100 USDC into the safest yield opportunity on Sui."
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Trepa Response Steps */}
-                <div className="divide-y divide-border/30">
-                  {/* Step 1: Intent Understanding */}
-                  <div className="p-6">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="h-6 w-6 rounded-md bg-sui/20 flex items-center justify-center">
-                        <Bot className="h-3.5 w-3.5 text-sui" />
-                      </div>
-                      <span className="font-display font-semibold text-sm text-sui">Step 1 — Intent Understanding</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3 ml-8">
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Goal</span>
-                        <p className="text-sm font-medium">Generate Yield</p>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Risk</span>
-                        <p className="text-sm font-medium">Low</p>
-                      </div>
-                      <div className="rounded-lg bg-muted/50 p-3">
-                        <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Amount</span>
-                        <p className="text-sm font-medium">100 USDC</p>
-                      </div>
-                    </div>
-                    <div className="ml-8 mt-3 rounded-lg bg-trepa/10 border border-trepa/20 p-3">
-                      <span className="text-[10px] text-trepa uppercase tracking-wider font-medium">Strategy</span>
-                      <div className="flex items-center gap-2 mt-1.5 text-sm">
-                        <span className="text-foreground">Swap USDC → SUI</span>
-                        <ChevronRight className="h-3 w-3 text-muted-foreground" />
-                        <span className="text-foreground">Stake SUI</span>
-                        <ChevronRight className="h-3 w-3 text-muted-foreground" />
-                        <span className="text-foreground">Deposit into Yield Strategy</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Step 2: PTB Preview */}
-                  <div className="p-6">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="h-6 w-6 rounded-md bg-trepa/20 flex items-center justify-center">
-                        <Layers className="h-3.5 w-3.5 text-trepa" />
-                      </div>
-                      <span className="font-display font-semibold text-sm text-trepa">Step 2 — Human-Readable PTB Preview</span>
-                    </div>
-                    <div className="ml-8 space-y-2">
-                      <div className="flex items-center gap-3 text-sm">
-                        <span className="h-5 w-5 rounded-full bg-trepa/20 text-trepa text-xs flex items-center justify-center font-bold">1</span>
-                        <span>Convert 100 USDC into SUI</span>
-                      </div>
-                      <div className="flex items-center gap-3 text-sm">
-                        <span className="h-5 w-5 rounded-full bg-trepa/20 text-trepa text-xs flex items-center justify-center font-bold">2</span>
-                        <span>Stake SUI to earn rewards</span>
-                      </div>
-                      <div className="flex items-center gap-3 text-sm">
-                        <span className="h-5 w-5 rounded-full bg-trepa/20 text-trepa text-xs flex items-center justify-center font-bold">3</span>
-                        <span>Store staking position in your wallet</span>
-                      </div>
-                      <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-yield/10 text-yield text-xs font-medium">
-                        Estimated Yield: 6.2% APR
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Step 3: Guardian */}
-                  <div className="p-6">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="h-6 w-6 rounded-md bg-guardian/20 flex items-center justify-center">
-                        <Shield className="h-3.5 w-3.5 text-guardian" />
-                      </div>
-                      <span className="font-display font-semibold text-sm text-guardian">Step 3 — Guardian Risk Analysis</span>
-                    </div>
-                    <div className="ml-8 space-y-2">
-                      <div className="rounded-lg bg-warning/5 border border-warning/20 p-3">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="h-1.5 w-1.5 rounded-full bg-warning" />
-                          <span className="text-xs font-semibold text-warning">High Slippage Warning</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">This swap may lose approximately 7.4% because liquidity is limited.</p>
-                      </div>
-                      <div className="rounded-lg bg-guardian/5 border border-guardian/20 p-3">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="h-1.5 w-1.5 rounded-full bg-guardian" />
-                          <span className="text-xs font-semibold text-guardian">Concentration Warning</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">All funds will be invested in a single asset. A decline in SUI price could significantly impact your position.</p>
-                      </div>
-                      <div className="rounded-lg bg-muted/30 border border-border/30 p-3">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
-                          <span className="text-xs font-semibold text-muted-foreground">Stale Pool Warning</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground">This pool has low recent activity and may carry additional execution risk.</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Step 4: Confirmation */}
-                  <div className="p-6">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="h-6 w-6 rounded-md bg-yield/20 flex items-center justify-center">
-                        <Lock className="h-3.5 w-3.5 text-yield" />
-                      </div>
-                      <span className="font-display font-semibold text-sm text-yield">Step 4 — Explicit Confirmation</span>
-                    </div>
-                    <div className="ml-8">
-                      <div className="rounded-lg bg-muted/30 border border-border/30 p-4 space-y-2">
-                        <div className="flex justify-between text-xs">
-                          <span className="text-muted-foreground">Goal</span>
-                          <span className="font-medium">Earn Yield</span>
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className="text-muted-foreground">Actions</span>
-                          <span className="font-medium">Swap USDC → SUI, Stake SUI</span>
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className="text-muted-foreground">Risks</span>
-                          <span className="font-medium text-warning">High Slippage, Single Asset</span>
-                        </div>
-                        <div className="flex gap-2 pt-2">
-                          <div className="px-3 py-1.5 rounded-md bg-yield/20 text-yield text-xs font-semibold">Approve</div>
-                          <div className="px-3 py-1.5 rounded-md bg-muted text-muted-foreground text-xs font-semibold">Cancel</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+      {/* ─── Flow Demo ─── */}
+      <section className="py-16 border-y border-border/50 bg-card/50 transition-theme">
+        <div className="container max-w-3xl">
+          <p className="text-xs text-muted-foreground text-center uppercase tracking-wider font-medium mb-6">The Required Flow</p>
+          <FlowVisualization steps={flowSteps} />
         </div>
       </section>
 
-      {/* Key Features */}
-      <section className="py-20 relative">
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-0 right-0 w-80 h-80 bg-trepa/5 rounded-full blur-[128px]" />
-          <div className="absolute bottom-0 left-0 w-80 h-80 bg-yield/5 rounded-full blur-[128px]" />
-        </div>
+      {/* ─── Example Walkthrough ─── */}
+      <section className="py-16 sm:py-24">
+        <div className="container max-w-3xl">
+          <h2 className="font-display text-2xl sm:text-3xl font-bold mb-2">See it in action</h2>
+          <p className="text-muted-foreground mb-8">A user describes a goal. Trepa handles the rest.</p>
 
-        <div className="container relative z-10">
-          <div className="text-center mb-12">
-            <h2 className="font-display text-3xl sm:text-4xl font-bold mb-4">
-              Why Trepa wins
-            </h2>
-            <p className="text-muted-foreground max-w-xl mx-auto">
-              Other intent engines stop at execution. Trepa builds a self-sustaining loop.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl mx-auto">
-            <Card className="border-sui/20 bg-card/50 hover:border-sui/40 transition-colors">
-              <CardContent className="p-6">
-                <div className="h-10 w-10 rounded-lg bg-sui/10 flex items-center justify-center mb-4">
-                  <Bot className="h-5 w-5 text-sui" />
+          <div className="space-y-4">
+            {/* User Input */}
+            <Card className="overflow-hidden transition-theme">
+              <CardContent className="p-5">
+                <div className="flex items-start gap-3">
+                  <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                    <span className="text-primary text-xs font-bold">U</span>
+                  </div>
+                  <p className="text-sm font-medium pt-1">
+                    "Invest 100 USDC into the safest yield opportunity on Sui."
+                  </p>
                 </div>
-                <h3 className="font-display font-semibold mb-2">Intent-First Design</h3>
-                <p className="text-sm text-muted-foreground">
-                  Users describe goals, not transactions. The AI determines the best strategy
-                  and compiles it into a Sui PTB automatically.
-                </p>
               </CardContent>
             </Card>
 
-            <Card className="border-guardian/20 bg-card/50 hover:border-guardian/40 transition-colors">
-              <CardContent className="p-6">
-                <div className="h-10 w-10 rounded-lg bg-guardian/10 flex items-center justify-center mb-4">
-                  <Shield className="h-5 w-5 text-guardian" />
-                </div>
-                <h3 className="font-display font-semibold mb-2">Guardian Risk Layer</h3>
-                <p className="text-sm text-muted-foreground">
-                  Every PTB is inspected before execution. Slippage, concentration, and stale
-                  pool risks are caught and explained in plain English.
-                </p>
-              </CardContent>
-            </Card>
+            {/* Steps */}
+            {[
+              {
+                step: 1,
+                title: 'Intent Understanding',
+                icon: <Bot className="h-4 w-4" />,
+                content: (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        ['Goal', 'Generate Yield'],
+                        ['Risk', 'Low'],
+                        ['Amount', '100 USDC'],
+                      ].map(([label, val]) => (
+                        <div key={label} className="rounded-md bg-muted/50 p-2.5">
+                          <div className="text-[10px] text-muted-foreground uppercase">{label}</div>
+                          <div className="text-xs font-semibold mt-0.5">{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <span>Swap USDC → SUI</span>
+                      <ChevronRight className="h-3 w-3" />
+                      <span>Stake SUI</span>
+                      <ChevronRight className="h-3 w-3" />
+                      <span>Deposit into Yield</span>
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                step: 2,
+                title: 'Human-Readable PTB Preview',
+                icon: <Layers className="h-4 w-4" />,
+                content: (
+                  <div className="space-y-2">
+                    {['Convert 100 USDC into SUI', 'Stake SUI to earn rewards', 'Store position in your wallet'].map((action, i) => (
+                      <div key={i} className="flex items-center gap-2.5 text-xs">
+                        <span className="h-5 w-5 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[10px] font-bold">{i + 1}</span>
+                        {action}
+                      </div>
+                    ))}
+                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-medium mt-1">
+                      Est. Yield: 6.2% APR
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                step: 3,
+                title: 'Guardian Risk Analysis',
+                icon: <Shield className="h-4 w-4" />,
+                content: (
+                  <div className="space-y-2">
+                    {[
+                      { severity: 'high', label: 'High Slippage', desc: 'Swap may lose ~7.4% due to limited liquidity' },
+                      { severity: 'medium', label: 'Concentration Risk', desc: '100% allocation to single asset' },
+                      { severity: 'low', label: 'Stale Pool', desc: 'Low recent activity, additional execution risk' },
+                    ].map(r => (
+                      <div key={r.label} className={cn(
+                        'rounded-md p-2.5 text-xs',
+                        r.severity === 'high' && 'bg-destructive/10 text-destructive',
+                        r.severity === 'medium' && 'bg-primary/10 text-primary',
+                        r.severity === 'low' && 'bg-muted text-muted-foreground',
+                      )}>
+                        <span className="font-semibold">{r.label}</span>
+                        <span className="mx-1.5">·</span>
+                        <span className="opacity-80">{r.desc}</span>
+                      </div>
+                    ))}
+                  </div>
+                ),
+              },
+              {
+                step: 4,
+                title: 'Explicit Confirmation',
+                icon: <Lock className="h-4 w-4" />,
+                content: (
+                  <div className="flex items-center gap-2">
+                    <div className="rounded-md bg-primary text-primary-foreground px-3 py-1 text-xs font-medium">Approve</div>
+                    <div className="rounded-md bg-muted text-muted-foreground px-3 py-1 text-xs font-medium">Cancel</div>
+                    <span className="text-[10px] text-muted-foreground ml-2">User must sign before execution</span>
+                  </div>
+                ),
+              },
+            ].map(({ step, title, icon, content }) => (
+              <Card key={step} className="overflow-hidden transition-theme">
+                <CardContent className="p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="h-6 w-6 rounded-md bg-primary/10 text-primary flex items-center justify-center">{icon}</div>
+                    <span className="text-xs font-semibold text-primary">Step {step} — {title}</span>
+                  </div>
+                  {content}
+                </CardContent>
+              </Card>
+            ))}
 
-            <Card className="border-yield/20 bg-card/50 hover:border-yield/40 transition-colors">
-              <CardContent className="p-6">
-                <div className="h-10 w-10 rounded-lg bg-yield/10 flex items-center justify-center mb-4">
-                  <Zap className="h-5 w-5 text-yield" />
+            {/* Treasury integration */}
+            <Card className="overflow-hidden border-primary/20 transition-theme">
+              <CardContent className="p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="h-6 w-6 rounded-md bg-primary/10 text-primary flex items-center justify-center">
+                    <Landmark className="h-4 w-4" />
+                  </div>
+                  <span className="text-xs font-semibold text-primary">Treasury Integration — The Innovation</span>
                 </div>
-                <h3 className="font-display font-semibold mb-2">Explicit Confirmation</h3>
-                <p className="text-sm text-muted-foreground">
-                  No auto-execution. Users see a full execution summary with risks before
-                  approving. Cancel anytime before signing.
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="border-trepa/20 bg-card/50 hover:border-trepa/40 transition-colors">
-              <CardContent className="p-6">
-                <div className="h-10 w-10 rounded-lg bg-trepa/10 flex items-center justify-center mb-4">
-                  <Landmark className="h-5 w-5 text-trepa" />
-                </div>
-                <h3 className="font-display font-semibold mb-2">Self-Funding Treasury</h3>
-                <p className="text-sm text-muted-foreground">
-                  Generated yield flows into an on-chain treasury stored as Move objects.
-                  Yield never touches principal — it funds future agent operations.
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="border-sui/20 bg-card/50 hover:border-sui/40 transition-colors">
-              <CardContent className="p-6">
-                <div className="h-10 w-10 rounded-lg bg-sui/10 flex items-center justify-center mb-4">
-                  <Layers className="h-5 w-5 text-sui" />
-                </div>
-                <h3 className="font-display font-semibold mb-2">PTB Compilation</h3>
-                <p className="text-sm text-muted-foreground">
-                  Strategies compile into native Sui Programmable Transaction Blocks — atomic,
-                  composable, and gas-efficient multi-step operations.
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="border-yield/20 bg-card/50 hover:border-yield/40 transition-colors">
-              <CardContent className="p-6">
-                <div className="h-10 w-10 rounded-lg bg-yield/10 flex items-center justify-center mb-4">
-                  <Lock className="h-5 w-5 text-yield" />
-                </div>
-                <h3 className="font-display font-semibold mb-2">Chrysalis + Ringfence</h3>
-                <p className="text-sm text-muted-foreground">
-                  Principal is ringfenced and never at risk. Only generated yield becomes
-                  operational capital — the chrysalis model of sustainable funding.
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Generated yield flows into a protected on-chain treasury. Principal is ringfenced.
+                  Only yield becomes operational capital — funding research, AI inference, monitoring,
+                  and future agent operations. This is the self-funding loop.
                 </p>
               </CardContent>
             </Card>
@@ -342,88 +289,44 @@ export default function Index() {
         </div>
       </section>
 
-      {/* Comparison Section */}
-      <section className="py-20 bg-card/30 border-y border-border/30">
-        <div className="container">
-          <div className="text-center mb-12">
-            <h2 className="font-display text-3xl sm:text-4xl font-bold mb-4">
-              Beyond a simple swap
-            </h2>
-            <p className="text-muted-foreground max-w-xl mx-auto">
-              Most intent engines stop at execution. Trepa builds a self-sustaining loop.
-            </p>
-          </div>
+      {/* ─── Features ─── */}
+      <section className="py-16 sm:py-24 border-t border-border/50 transition-theme">
+        <div className="container max-w-3xl">
+          <h2 className="font-display text-2xl sm:text-3xl font-bold mb-2">What makes Trepa different</h2>
+          <p className="text-muted-foreground mb-8">Other intent engines stop at execution. Trepa builds a self-sustaining loop.</p>
 
-          <div className="max-w-3xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Others */}
-            <Card className="border-destructive/20 bg-destructive/5">
-              <CardContent className="p-6">
-                <h3 className="font-display font-semibold mb-4 text-destructive">Other Intent Engines</h3>
-                <div className="space-y-3">
-                  {['User Goal', 'Swap', 'Done'].map((step, i) => (
-                    <div key={i} className="flex items-center gap-3">
-                      <div className="h-7 w-7 rounded-full bg-destructive/10 flex items-center justify-center text-xs font-bold text-destructive">
-                        {i + 1}
-                      </div>
-                      <span className="text-sm text-muted-foreground">{step}</span>
-                      {i < 2 && <ChevronRight className="h-3 w-3 text-muted-foreground/40 ml-auto" />}
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Trepa */}
-            <Card className="border-sui/30 bg-sui/5 glow-sui">
-              <CardContent className="p-6">
-                <h3 className="font-display font-semibold mb-4 text-sui">Trepa</h3>
-                <div className="space-y-2">
-                  {[
-                    'User Goal',
-                    'Intent Parsing',
-                    'PTB Compilation',
-                    'Guardian Analysis',
-                    'Human Approval',
-                    'Execution',
-                    'Treasury Growth',
-                    'Yield Generation',
-                  ].map((step, i) => (
-                    <div key={i} className="flex items-center gap-3">
-                      <div className="h-5 w-5 rounded-full bg-sui/20 flex items-center justify-center text-[10px] font-bold text-sui">
-                        {i + 1}
-                      </div>
-                      <span className="text-xs">{step}</span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {[
+              { icon: <Bot className="h-5 w-5" />, title: 'Intent-First', desc: 'Users describe goals, not transactions. The AI determines strategy and compiles a Sui PTB.' },
+              { icon: <Shield className="h-5 w-5" />, title: 'Guardian Layer', desc: 'Every PTB is inspected for slippage, concentration, and stale pool risks before execution.' },
+              { icon: <Lock className="h-5 w-5" />, title: 'Explicit Approval', desc: 'No auto-execution. Users review the full plan and risks, then approve or cancel.' },
+              { icon: <Landmark className="h-5 w-5" />, title: 'Self-Funding Treasury', desc: 'Yield flows into an on-chain treasury. Principal stays ringfenced. Only yield funds operations.' },
+              { icon: <Layers className="h-5 w-5" />, title: 'Native PTBs', desc: 'Strategies compile into Sui Programmable Transaction Blocks — atomic, composable, gas-efficient.' },
+              { icon: <Zap className="h-5 w-5" />, title: 'Chrysalis Model', desc: 'Yield metamorphoses into operational capacity. As the treasury grows, so does the agent.' },
+            ].map(feat => (
+              <Card key={feat.title} className="transition-theme hover:border-primary/30 transition-colors duration-200">
+                <CardContent className="p-5">
+                  <div className="text-primary mb-3">{feat.icon}</div>
+                  <h3 className="font-display font-semibold text-sm mb-1">{feat.title}</h3>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{feat.desc}</p>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* CTA Section */}
-      <section className="py-20 relative">
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-sui/5 rounded-full blur-[160px]" />
-        </div>
-
-        <div className="container relative z-10">
-          <div className="max-w-2xl mx-auto text-center">
-            <h2 className="font-display text-3xl sm:text-4xl font-bold mb-4">
-              Ready to try the Intent Engine?
-            </h2>
-            <p className="text-muted-foreground mb-8 text-balance">
-              Describe your financial goal and watch Trepa translate it into a complete,
-              risk-analyzed execution plan on Sui.
-            </p>
-            <Link to="/engine">
-              <Button size="lg" className="gradient-sui text-white font-semibold px-8 h-12 glow-sui hover:opacity-90 transition-opacity">
-                Launch Intent Engine
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </Link>
-          </div>
+      {/* ─── CTA ─── */}
+      <section className="py-16 sm:py-24">
+        <div className="container max-w-3xl text-center">
+          <h2 className="font-display text-2xl sm:text-3xl font-bold mb-3">Ready to try it?</h2>
+          <p className="text-muted-foreground mb-6">Describe your financial goal and watch Trepa translate it into a complete execution plan.</p>
+          <Link to="/engine">
+            <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.97] transition-all duration-150">
+              Launch Intent Engine
+              <ArrowRight className="ml-1.5 h-4 w-4" />
+            </Button>
+          </Link>
         </div>
       </section>
 
