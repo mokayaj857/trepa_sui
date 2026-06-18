@@ -2,7 +2,7 @@
  * Trepa Sui Wallet Connection
  *
  * Direct integration with Sui wallets via the standard wallet standard.
- * Works with Sui Wallet, Ethos, Surf, etc. — no SDK dependency.
+ * Works with Sui Wallet, Ethos, Surf, etc. — no heavy SDK dependency.
  */
 
 import { useState, useCallback, useEffect } from 'react';
@@ -34,14 +34,15 @@ interface SuiWallet {
   hasPermission: () => Promise<boolean>;
   requestPermissions: () => Promise<boolean>;
   getAccounts: () => Promise<string[]>;
-  executeMoveCall: (tx: unknown) => Promise<string>;
   signAndExecuteTransaction: (tx: unknown) => Promise<{ digest: string }>;
 }
 
-declare global {
-  interface Window {
-    suiWallet?: SuiWallet;
-  }
+// ─── Safe wallet accessor ───
+
+function getSuiWallet(): SuiWallet | undefined {
+  if (typeof window === 'undefined') return undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (window as any).suiWallet as SuiWallet | undefined;
 }
 
 // ─── Hook ───
@@ -54,23 +55,29 @@ export function useTrepaWallet(): WalletState {
 
   // Check for existing connection on mount
   useEffect(() => {
+    let cancelled = false;
+
     const checkConnection = async () => {
       try {
-        if (window.suiWallet) {
-          const hasPermission = await window.suiWallet.hasPermission();
-          if (hasPermission) {
-            const accounts = await window.suiWallet.getAccounts();
-            if (accounts.length > 0) {
-              setAddress(accounts[0]);
-              setWalletName('Sui Wallet');
-            }
+        const wallet = getSuiWallet();
+        if (!wallet) return;
+        const hasPermission = await wallet.hasPermission?.();
+        if (cancelled) return;
+        if (hasPermission) {
+          const accounts = await wallet.getAccounts?.();
+          if (cancelled) return;
+          if (accounts && accounts.length > 0) {
+            setAddress(accounts[0]);
+            setWalletName('Sui Wallet');
           }
         }
       } catch {
         // Wallet not available or not connected
       }
     };
+
     checkConnection();
+    return () => { cancelled = true; };
   }, []);
 
   const isConnected = !!address;
@@ -80,10 +87,11 @@ export function useTrepaWallet(): WalletState {
 
   const connect = useCallback(async () => {
     try {
-      if (window.suiWallet) {
-        await window.suiWallet.requestPermissions();
-        const accounts = await window.suiWallet.getAccounts();
-        if (accounts.length > 0) {
+      const wallet = getSuiWallet();
+      if (wallet) {
+        await wallet.requestPermissions?.();
+        const accounts = await wallet.getAccounts?.();
+        if (accounts && accounts.length > 0) {
           setAddress(accounts[0]);
           setWalletName('Sui Wallet');
         }
@@ -105,12 +113,13 @@ export function useTrepaWallet(): WalletState {
   const executePTB = useCallback(async (ptbJson: unknown): Promise<ExecutionResult> => {
     setIsExecuting(true);
     try {
-      if (window.suiWallet && address) {
+      const wallet = getSuiWallet();
+      if (wallet && address) {
         // Execute via wallet
-        const result = await window.suiWallet.signAndExecuteTransaction(ptbJson);
+        const result = await wallet.signAndExecuteTransaction?.(ptbJson);
         return {
           success: true,
-          digest: result.digest,
+          digest: result?.digest ?? '',
           gasUsed: '~0.002 SUI',
         };
       }
@@ -151,5 +160,5 @@ export function useTrepaWallet(): WalletState {
 // ─── Wallet availability check ───
 
 export function isSuiWalletAvailable(): boolean {
-  return typeof window !== 'undefined' && !!window.suiWallet;
+  return typeof window !== 'undefined' && !!getSuiWallet();
 }

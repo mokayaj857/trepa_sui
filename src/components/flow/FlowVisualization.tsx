@@ -9,12 +9,12 @@ interface FlowStep {
 }
 
 interface FlowVisualizationProps {
-  steps: FlowStep[];
+  steps?: FlowStep[];
   className?: string;
 }
 
 export function FlowVisualization({ steps, className }: FlowVisualizationProps) {
-  if (!steps || steps.length === 0) return null;
+  if (!steps || !Array.isArray(steps) || steps.length === 0) return null;
 
   return (
     <div className={cn('flex items-center justify-center gap-0', className)}>

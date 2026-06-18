@@ -51,7 +51,7 @@ const examples = [
 
 function Panel({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn('animate-in fade-in-0 slide-in-from-bottom-3 duration-400', className)}>
+    <div className={cn('animate-in fade-in-0 slide-in-from-bottom-2 duration-500', className)}>
       {children}
     </div>
   );
@@ -369,7 +369,7 @@ export default function IntentEngine() {
                               'rounded-md p-3 animate-in fade-in-0 slide-in-from-left-2 duration-300',
                               getSeverityBg(check.severity),
                             )}
-                            style={{ animationDelay: `${i * 100}ms`, animationFillMode: 'backwards' }}
+                            style={{ animationDelay: `${i * 100}ms` }}
                           >
                             <div className="flex items-center gap-2 mb-0.5">
                               <AlertTriangle className={cn(
@@ -388,9 +388,9 @@ export default function IntentEngine() {
                               </span>
                               <span className="text-[10px] text-muted-foreground ml-auto">{check.detail}</span>
                             </div>
-                            <p className="text-[11px] text-muted-foreground ml-5.5">{check.description}</p>
+                            <p className="text-[11px] text-muted-foreground ml-[22px]">{check.description}</p>
                             {check.recommendation && (
-                              <p className="text-[10px] text-primary mt-1 ml-5.5">→ {check.recommendation}</p>
+                              <p className="text-[10px] text-primary mt-1 ml-[22px]">→ {check.recommendation}</p>
                             )}
                           </div>
                         ))}
