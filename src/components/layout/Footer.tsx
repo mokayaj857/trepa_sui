@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom';
-import { Bot } from 'lucide-react';
 
 export function Footer() {
   return (
@@ -7,9 +6,7 @@ export function Footer() {
       <div className="container py-10">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <Link to="/" className="flex items-center gap-2">
-            <div className="h-6 w-6 rounded-md bg-primary flex items-center justify-center">
-              <Bot className="h-3.5 w-3.5 text-white" />
-            </div>
+            <img src="/logo.svg" alt="Trepa" className="h-6 w-6" />
             <span className="font-display text-sm font-bold">Trepa</span>
           </Link>
           <p className="text-xs text-muted-foreground">

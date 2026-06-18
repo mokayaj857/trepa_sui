@@ -81,42 +81,70 @@ export default function Index() {
 
       {/* ─── Hero ─── */}
       <section className="pt-28 pb-16 sm:pt-36 sm:pb-24">
-        <div className="container max-w-3xl">
-          <div
-            className={cn(
-              'transition-all duration-700 ease-out',
-              heroVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6',
-            )}
-          >
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium mb-6">
-              <Zap className="h-3 w-3" />
-              Built on Sui
+        <div className="container max-w-5xl">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
+            <div
+              className={cn(
+                'transition-all duration-700 ease-out',
+                heroVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6',
+              )}
+            >
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium mb-6">
+                <img src="/images/sui-logo.png" alt="Sui" className="h-3.5 w-3.5" />
+                Built on Sui
+              </div>
+
+              <h1 className="font-display text-4xl sm:text-5xl font-bold tracking-tight leading-[1.1] mb-5">
+                Describe a goal.
+                <br />
+                <span className="text-primary">Trepa executes it.</span>
+              </h1>
+
+              <p className="text-base sm:text-lg text-muted-foreground max-w-xl mb-8 leading-relaxed">
+                The first self-funding intent engine on Sui. Plain-English goals become
+                executable PTBs with risk analysis, user approval, and autonomous treasury growth.
+              </p>
+
+              <div className="flex items-center gap-3">
+                <Link to="/engine">
+                  <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.97] transition-all duration-150">
+                    Try the Engine
+                    <ArrowRight className="ml-1.5 h-4 w-4" />
+                  </Button>
+                </Link>
+                <Link to="/treasury">
+                  <Button variant="outline" size="lg" className="transition-all duration-150">
+                    Treasury
+                    <ChevronRight className="ml-0.5 h-3.5 w-3.5" />
+                  </Button>
+                </Link>
+              </div>
             </div>
 
-            <h1 className="font-display text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.1] mb-5">
-              Describe a goal.
-              <br />
-              <span className="text-primary">Trepa executes it.</span>
-            </h1>
-
-            <p className="text-base sm:text-lg text-muted-foreground max-w-xl mb-8 leading-relaxed">
-              The first self-funding intent engine on Sui. Plain-English goals become
-              executable PTBs with risk analysis, user approval, and autonomous treasury growth.
-            </p>
-
-            <div className="flex items-center gap-3">
-              <Link to="/engine">
-                <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.97] transition-all duration-150">
-                  Try the Engine
-                  <ArrowRight className="ml-1.5 h-4 w-4" />
-                </Button>
-              </Link>
-              <Link to="/treasury">
-                <Button variant="outline" size="lg" className="transition-all duration-150">
-                  Treasury
-                  <ChevronRight className="ml-0.5 h-3.5 w-3.5" />
-                </Button>
-              </Link>
+            {/* Hero image */}
+            <div
+              className={cn(
+                'relative transition-all duration-700 delay-200 ease-out',
+                heroVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8',
+              )}
+            >
+              <div className="relative rounded-xl overflow-hidden border border-border/30 shadow-lg">
+                <img
+                  src="/images/sui-hero.jpeg"
+                  alt="Sui ecosystem"
+                  className="w-full h-auto object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-background/80 via-background/20 to-transparent" />
+                <div className="absolute bottom-4 left-4 right-4">
+                  <div className="flex items-center gap-2">
+                    <img src="/images/usdc-coin.png" alt="USDC" className="h-8 w-8" />
+                    <img src="/images/sui-logo.png" alt="SUI" className="h-7 w-7" />
+                    <span className="text-xs font-medium text-primary-foreground bg-background/60 backdrop-blur-sm rounded-md px-2 py-1">
+                      Swap · Stake · Lend
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -128,11 +156,12 @@ export default function Index() {
             )}
           >
             {[
-              { label: 'Flow Steps', value: stepsCounter },
-              { label: 'Risk Checks', value: risksCounter },
-              { label: 'Human Approval', value: 'Required' },
+              { label: 'Flow Steps', value: stepsCounter, icon: <Layers className="h-4 w-4 text-primary" /> },
+              { label: 'Risk Checks', value: risksCounter, icon: <Shield className="h-4 w-4 text-primary" /> },
+              { label: 'Human Approval', value: 'Required', icon: <Lock className="h-4 w-4 text-primary" /> },
             ].map(stat => (
               <div key={stat.label} className="text-center">
+                <div className="flex justify-center mb-1">{stat.icon}</div>
                 <div className="font-display text-2xl sm:text-3xl font-bold text-foreground">
                   {typeof stat.value === 'number' ? stat.value : stat.value}
                 </div>
@@ -188,7 +217,10 @@ export default function Index() {
                       ].map(([label, val]) => (
                         <div key={label} className="rounded-md bg-muted/50 p-2.5">
                           <div className="text-[10px] text-muted-foreground uppercase">{label}</div>
-                          <div className="text-xs font-semibold mt-0.5">{val}</div>
+                          <div className="text-xs font-semibold mt-0.5 flex items-center gap-1">
+                            {label === 'Amount' && <img src="/images/usdc-coin.png" alt="" className="h-3.5 w-3.5" />}
+                            {val}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -285,6 +317,37 @@ export default function Index() {
                 </p>
               </CardContent>
             </Card>
+          </div>
+        </div>
+      </section>
+
+      {/* ─── Sui Ecosystem ─── */}
+      <section className="py-16 border-t border-border/50 transition-theme">
+        <div className="container max-w-5xl">
+          <div className="text-center mb-8">
+            <img src="/images/sui-logo.png" alt="Sui" className="h-8 w-8 mx-auto mb-3" />
+            <h2 className="font-display text-2xl sm:text-3xl font-bold mb-2">Built for the Sui Ecosystem</h2>
+            <p className="text-muted-foreground text-sm max-w-lg mx-auto">
+              Trepa leverages Sui's parallel execution, PTB composability, and Move object model to power the self-funding loop.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {[
+              { src: '/images/navi-protocol.jpeg', title: 'NAVI Protocol', desc: 'Lending & borrowing on Sui' },
+              { src: '/images/sui-network-1.jpeg', title: 'Sui Network', desc: 'Parallel execution engine' },
+              { src: '/images/sui-network-2.jpeg', title: 'DeFi Ecosystem', desc: 'Swap, stake, lend on Sui' },
+            ].map(item => (
+              <Card key={item.title} className="overflow-hidden transition-theme hover:border-primary/30 transition-colors duration-200">
+                <div className="h-32 overflow-hidden">
+                  <img src={item.src} alt={item.title} className="w-full h-full object-cover" />
+                </div>
+                <CardContent className="p-3">
+                  <h3 className="font-display font-semibold text-xs">{item.title}</h3>
+                  <p className="text-[10px] text-muted-foreground">{item.desc}</p>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         </div>
       </section>

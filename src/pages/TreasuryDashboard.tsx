@@ -20,9 +20,9 @@ import {
 } from 'lucide-react';
 
 const assets = [
-  { name: 'SUI Staked', amount: '1,247.83 SUI', value: '$3,743', apr: '6.2%' },
-  { name: 'vSUI Position', amount: '432.15 vSUI', value: '$1,296', apr: '8.1%' },
-  { name: 'USDC Reserve', amount: '500.00 USDC', value: '$500', apr: '3.5%' },
+  { name: 'SUI Staked', amount: '1,247.83 SUI', value: '$3,743', apr: '6.2%', icon: '/images/sui-logo.png' },
+  { name: 'vSUI Position', amount: '432.15 vSUI', value: '$1,296', apr: '8.1%', icon: '/images/sui-logo.png' },
+  { name: 'USDC Reserve', amount: '500.00 USDC', value: '$500', apr: '3.5%', icon: '/images/usdc-coin.png' },
 ];
 
 const yieldEntries = [
@@ -57,10 +57,10 @@ export default function TreasuryDashboard() {
       <Navbar />
 
       <main className="pt-16">
-        <div className="border-b border-border/50 bg-card/50 py-8 transition-theme">
+          <div className="border-b border-border/50 bg-card/50 py-8 transition-theme">
           <div className="container max-w-2xl">
             <div className="flex items-center gap-2.5 mb-1">
-              <Landmark className="h-5 w-5 text-primary" />
+              <img src="/images/sui-logo.png" alt="Sui" className="h-5 w-5" />
               <h1 className="font-display text-xl font-bold">Treasury</h1>
             </div>
             <p className="text-sm text-muted-foreground">Self-funding treasury. Principal ringfenced. Only yield funds operations.</p>
@@ -129,9 +129,12 @@ export default function TreasuryDashboard() {
               <div className="space-y-2">
                 {assets.map(a => (
                   <div key={a.name} className="flex items-center justify-between p-2.5 rounded-md bg-muted/50 transition-theme">
-                    <div>
-                      <div className="text-sm font-medium">{a.name}</div>
-                      <div className="text-[11px] text-muted-foreground">{a.amount}</div>
+                    <div className="flex items-center gap-2">
+                      <img src={a.icon} alt="" className="h-5 w-5" />
+                      <div>
+                        <div className="text-sm font-medium">{a.name}</div>
+                        <div className="text-[11px] text-muted-foreground">{a.amount}</div>
+                      </div>
                     </div>
                     <div className="text-right">
                       <div className="text-sm font-semibold">{a.value}</div>

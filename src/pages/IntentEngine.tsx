@@ -319,7 +319,7 @@ export default function IntentEngine() {
                     {ptbResult.actions.map(a => (
                       <div key={`${a.type}-${a.label}`} className="flex items-center gap-3 p-3 rounded-md bg-muted/50 transition-theme">
                         <span className="h-6 w-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold">
-                          {a.type === 'swap' ? '⇄' : a.type === 'stake' ? '◎' : a.type === 'lend' ? '↗' : '◆'}
+                          {a.type === 'swap' ? <img src="/images/sui-logo.png" alt="" className="h-3.5 w-3.5" /> : a.type === 'stake' ? '◎' : a.type === 'lend' ? '↗' : '◆'}
                         </span>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium">{a.label}</p>
