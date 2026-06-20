@@ -10,8 +10,7 @@ export function Footer() {
             <span className="font-display text-sm font-bold">Trepa</span>
           </Link>
           <p className="text-xs text-muted-foreground">
-            Self-funding intent engine on Sui · Vibed with{' '}
-            <a href="https://shakespeare.diy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Shakespeare</a>
+            Self-funding intent engine on Sui
           </p>
         </div>
       </div>
