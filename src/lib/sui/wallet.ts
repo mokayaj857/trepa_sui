@@ -1,10 +1,19 @@
 /**
  * Trepa Sui Wallet — Testnet
  *
- * Direct JSON-RPC to Sui testnet. Real balances, real transactions.
- * Connects via the Sui Wallet Standard — supports both the legacy
- * signAndExecuteTransactionBlock API and the modern
- * signAndExecuteTransaction API used by current Sui Wallet extensions.
+ * Connects to Sui wallets via the Wallet Standard (the official cross-chain
+ * protocol that all Sui wallets implement). Uses:
+ *
+ *   - getWallets() for discovery
+ *   - wallet.features['standard:connect'] for connecting
+ *   - wallet.features['sui:signAndExecuteTransaction'] for v2 execution
+ *   - wallet.features['sui:signAndExecuteTransactionBlock'] for legacy v1
+ *   - wallet.accounts for auto-restored authorized accounts
+ *
+ * Also falls back to legacy injected wallets (window.suiWallet) for
+ * older extensions that don't use the Wallet Standard.
+ *
+ * All on-chain reads use direct JSON-RPC to Sui testnet.
  */
 
 import { useState, useCallback, useEffect } from 'react';
@@ -12,8 +21,6 @@ import { useState, useCallback, useEffect } from 'react';
 // ─── Sui Testnet RPC ───
 
 export const SUI_TESTNET_URL = 'https://fullnode.testnet.sui.io:443';
-
-// Sui System State object ID (constant on all networks)
 export const SUI_SYSTEM_STATE_OBJECT_ID = '0x5';
 
 async function suiRpc(method: string, params: unknown[]): Promise<unknown> {
@@ -27,11 +34,10 @@ async function suiRpc(method: string, params: unknown[]): Promise<unknown> {
   return json.result;
 }
 
-// ─── Coin Types (Testnet) ───
+// ─── Coin Types ───
 
 export const COIN_TYPES = {
   SUI: '0x2::sui::SUI',
-  // Testnet USDC
   USDC: '0xa99b8952d4f7d947ea77fe0ecdcc9e5fc0bcf28e1d5e2dc07fcd2e811f025832::usdc::USDC',
 } as const;
 
@@ -59,206 +65,221 @@ export interface ExecutionResult {
   error?: string;
 }
 
-// ─── Sui Wallet Detection ───
-//
-// The Sui ecosystem has two generations of wallet APIs:
-//
-// 1. Legacy: window.suiWallet with signAndExecuteTransactionBlock()
-// 2. Modern: window.sui with signAndExecuteTransaction()
-//
-// We detect BOTH and adapt. The modern Sui Wallet extension exposes
-// itself on window.sui with:
-//   - connect() → { accounts: string[] }
-//   - disconnect()
-//   - getAccounts() → string[]
-//   - signAndExecuteTransaction(input) → { digest }
-//   - hasPermissions() / requestPermissions()
-//
-// The legacy wallets use:
-//   - hasPermission() / requestPermissions()
-//   - getAccounts()
-//   - signAndExecuteTransactionBlock(input)
-
+// ─── Wallet Standard Types ───
+// Minimal types for the Wallet Standard we need.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type WalletObj = Record<string, any>;
+type AnyRecord = Record<string, any>;
 
-interface DetectedWallet {
-  name: string;
+interface WalletAccount {
+  address: string;
+  publicKey?: Uint8Array;
+  chains: string[];
+  features: string[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  obj: WalletObj;
-  isModern: boolean;
+  [key: string]: any;
 }
 
-function detectSuiWallets(): DetectedWallet[] {
+interface Wallet {
+  name: string;
+  icon: string;
+  version: string;
+  accounts: WalletAccount[];
+  chains: string[];
+  features: AnyRecord;
+}
+
+// ─── Wallet Standard Discovery ───
+
+function getRegisteredWallets(): Wallet[] {
   if (typeof window === 'undefined') return [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any;
-  const wallets: DetectedWallet[] = [];
 
-  // ─── Modern Sui Wallet (window.sui) ───
-  // The current Sui Wallet extension injects as window.sui
-  // It uses signAndExecuteTransaction (no "Block")
-  if (w.sui && typeof w.sui === 'object') {
-    const hasExec = typeof w.sui.signAndExecuteTransaction === 'function';
-    const hasExecBlock = typeof w.sui.signAndExecuteTransactionBlock === 'function';
-    if (hasExec || hasExecBlock) {
-      wallets.push({
-        name: w.sui.name ?? 'Sui Wallet',
-        obj: w.sui,
-        isModern: hasExec && !hasExecBlock,
-      });
+  // The Wallet Standard registers wallets via getWallets()
+  // which is typically available from @wallet-standard/base
+  // But in practice, wallets also register on window.__SUI__WALLET_STANDARD__ etc.
+  // The most reliable way is to check window.walletStandard
+
+  const wallets: Wallet[] = [];
+
+  // Method 1: Wallet Standard getWallets()
+  // Some dapp-kit bundles register this globally
+  if (typeof w.getWallets === 'function') {
+    try {
+      const found = w.getWallets().get();
+      if (Array.isArray(found)) {
+        wallets.push(...found);
+      }
+    } catch {
+      // getWallets() not available
     }
   }
 
-  // ─── Legacy: window.suiWallet ───
-  if (w.suiWallet && typeof w.suiWallet === 'object') {
-    if (typeof w.suiWallet.signAndExecuteTransactionBlock === 'function') {
-      wallets.push({
-        name: w.suiWallet.name ?? 'Sui Wallet (Legacy)',
-        obj: w.suiWallet,
-        isModern: false,
-      });
+  // Method 2: Check window.walletStandard
+  if (w.walletStandard?.wallets && Array.isArray(w.walletStandard.wallets)) {
+    for (const wallet of w.walletStandard.wallets) {
+      if (!wallets.some(w => w.name === wallet.name)) {
+        wallets.push(wallet);
+      }
     }
   }
 
-  // ─── Suiet ───
-  if (w.__suiet__ && typeof w.__suiet__ === 'object') {
-    const hasExec = typeof w.__suiet__.signAndExecuteTransaction === 'function';
-    const hasExecBlock = typeof w.__suiet__.signAndExecuteTransactionBlock === 'function';
-    if (hasExec || hasExecBlock) {
-      wallets.push({
-        name: 'Suiet',
-        obj: w.__suiet__,
-        isModern: hasExec && !hasExecBlock,
-      });
+  // Method 3: Direct wallet injection (legacy fallback)
+  // Sui Wallet injects as window.sui with Wallet Standard interface
+  if (w.sui && typeof w.sui === 'object' && !wallets.some(wl => wl.name === (w.sui.name ?? 'Sui Wallet'))) {
+    // Check if it implements Wallet Standard features
+    const hasFeatures = w.sui.features && typeof w.sui.features === 'object';
+    const hasAccounts = Array.isArray(w.sui.accounts);
+    const hasConnect = hasFeatures && (
+      typeof w.sui.features['standard:connect']?.connect === 'function'
+    );
+
+    if (hasFeatures || hasAccounts || hasConnect || typeof w.sui.connect === 'function') {
+      wallets.push(w.sui);
     }
   }
 
-  // ─── Ethos ───
-  if (w.ethos && typeof w.ethos === 'object') {
-    const hasExec = typeof w.ethos.signAndExecuteTransaction === 'function';
-    const hasExecBlock = typeof w.ethos.signAndExecuteTransactionBlock === 'function';
-    if (hasExec || hasExecBlock) {
-      wallets.push({
-        name: 'Ethos',
-        obj: w.ethos,
-        isModern: hasExec && !hasExecBlock,
-      });
-    }
-  }
-
-  // ─── Surf ───
-  if (w.surf && typeof w.surf === 'object') {
-    const hasExec = typeof w.surf.signAndExecuteTransaction === 'function';
-    const hasExecBlock = typeof w.surf.signAndExecuteTransactionBlock === 'function';
-    if (hasExec || hasExecBlock) {
-      wallets.push({
-        name: 'Surf',
-        obj: w.surf,
-        isModern: hasExec && !hasExecBlock,
-      });
+  // Suiet
+  if (w.__suiet__ && typeof w.__suiet__ === 'object' && !wallets.some(wl => wl.name === 'Suiet')) {
+    if (w.__suiet__.features || Array.isArray(w.__suiet__.accounts) || typeof w.__suiet__.connect === 'function') {
+      w.__suiet__.name = w.__suiet__.name ?? 'Suiet';
+      wallets.push(w.__suiet__);
     }
   }
 
   return wallets;
 }
 
-function getPrimaryWallet(): DetectedWallet | undefined {
-  return detectSuiWallets()[0];
-}
+// ─── Connect via Wallet Standard ───
 
-// ─── Connect to wallet (handles both modern and legacy) ───
-
-async function connectWallet(wallet: DetectedWallet): Promise<string[]> {
-  const { obj, isModern } = wallet;
-
-  if (isModern) {
-    // Modern API: wallet.connect()
-    if (typeof obj.connect === 'function') {
-      const result = await obj.connect();
-      // connect() returns { accounts: string[] } or string[]
-      if (result?.accounts) return result.accounts;
-      if (Array.isArray(result)) return result;
-    }
-    // Fallback: requestPermissions + getAccounts
-    if (typeof obj.requestPermissions === 'function') {
-      await obj.requestPermissions();
-    }
-    if (typeof obj.getAccounts === 'function') {
-      return await obj.getAccounts();
-    }
-    return [];
+async function connectStandardWallet(wallet: Wallet): Promise<WalletAccount[]> {
+  // If the wallet already has authorized accounts, return them
+  if (wallet.accounts && wallet.accounts.length > 0) {
+    return wallet.accounts;
   }
 
-  // Legacy API: requestPermissions + getAccounts
-  if (typeof obj.requestPermissions === 'function') {
-    await obj.requestPermissions();
+  // Try standard:connect feature
+  const connectFeature = wallet.features?.['standard:connect'];
+  if (connectFeature && typeof connectFeature.connect === 'function') {
+    const result = await connectFeature.connect();
+    // connect() may return { accounts: WalletAccount[] }
+    if (result?.accounts && result.accounts.length > 0) {
+      return result.accounts;
+    }
   }
-  if (typeof obj.getAccounts === 'function') {
-    return await obj.getAccounts();
+
+  // Fallback: legacy connect() method on the wallet object
+  if (typeof (wallet as AnyRecord).connect === 'function') {
+    const result = await (wallet as AnyRecord).connect();
+    if (result?.accounts && result.accounts.length > 0) {
+      return result.accounts;
+    }
+    // Some wallets return the accounts array directly
+    if (Array.isArray(result) && result.length > 0) {
+      return result;
+    }
   }
+
+  // Fallback: requestPermissions + getAccounts (legacy Sui Wallet)
+  if (typeof (wallet as AnyRecord).requestPermissions === 'function') {
+    await (wallet as AnyRecord).requestPermissions();
+  }
+  if (typeof (wallet as AnyRecord).getAccounts === 'function') {
+    const accounts = await (wallet as AnyRecord).getAccounts();
+    if (Array.isArray(accounts) && accounts.length > 0) {
+      // Convert string addresses to minimal WalletAccount-like objects
+      return accounts.map((addr: string) => ({
+        address: typeof addr === 'string' ? addr : addr.address,
+        chains: ['sui:testnet'],
+        features: [],
+      }));
+    }
+  }
+
+  // Last check: maybe accounts got populated after connect
+  if (wallet.accounts && wallet.accounts.length > 0) {
+    return wallet.accounts;
+  }
+
   return [];
 }
 
 // ─── Check existing connection ───
 
-async function checkExistingConnection(wallet: DetectedWallet): Promise<string[]> {
-  const { obj, isModern } = wallet;
-
-  if (isModern) {
-    // Modern wallets: hasPermissions() or getAccounts()
-    if (typeof obj.hasPermissions === 'function') {
-      try {
-        const has = await obj.hasPermissions();
-        if (!has) return [];
-      } catch {
-        return [];
-      }
-    }
-    if (typeof obj.getAccounts === 'function') {
-      return await obj.getAccounts();
-    }
-    return [];
-  }
-
-  // Legacy: hasPermission + getAccounts
-  if (typeof obj.hasPermission === 'function') {
-    try {
-      const has = await obj.hasPermission();
-      if (!has) return [];
-    } catch {
-      return [];
-    }
-  }
-  if (typeof obj.getAccounts === 'function') {
-    return await obj.getAccounts();
+function getExistingAccounts(wallet: Wallet): WalletAccount[] {
+  // The Wallet Standard says wallets auto-restore authorized accounts
+  if (wallet.accounts && wallet.accounts.length > 0) {
+    return wallet.accounts;
   }
   return [];
 }
 
-// ─── Execute transaction (handles both modern and legacy) ───
+// ─── Execute transaction via Wallet Standard ───
 
-async function executeWalletTransaction(
-  wallet: DetectedWallet,
+async function executeViaWallet(
+  wallet: Wallet,
+  account: WalletAccount,
   tx: unknown,
 ): Promise<{ digest: string }> {
-  const { obj, isModern } = wallet;
-
-  if (isModern && typeof obj.signAndExecuteTransaction === 'function') {
-    return await obj.signAndExecuteTransaction({
+  // Try v2: sui:signAndExecuteTransaction
+  const v2Feature = wallet.features?.['sui:signAndExecuteTransaction'];
+  if (v2Feature && typeof v2Feature.signAndExecuteTransaction === 'function') {
+    return await v2Feature.signAndExecuteTransaction({
       transaction: tx,
+      account,
+      chain: 'sui:testnet',
       options: { showEffects: true },
     });
   }
 
-  if (typeof obj.signAndExecuteTransactionBlock === 'function') {
-    return await obj.signAndExecuteTransactionBlock({
+  // Try v1 legacy: sui:signAndExecuteTransactionBlock
+  const v1Feature = wallet.features?.['sui:signAndExecuteTransactionBlock'];
+  if (v1Feature && typeof v1Feature.signAndExecuteTransactionBlock === 'function') {
+    return await v1Feature.signAndExecuteTransactionBlock({
+      transactionBlock: tx,
+      account,
+      chain: 'sui:testnet',
+      options: { showEffects: true, showRawEffects: true },
+    });
+  }
+
+  // Fallback: direct method on wallet object (legacy injection)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = wallet as any;
+  if (typeof w.signAndExecuteTransaction === 'function') {
+    return await w.signAndExecuteTransaction({
+      transaction: tx,
+      options: { showEffects: true },
+    });
+  }
+  if (typeof w.signAndExecuteTransactionBlock === 'function') {
+    return await w.signAndExecuteTransactionBlock({
       transactionBlock: tx,
       options: { showEffects: true, showRawEffects: true },
     });
   }
 
   throw new Error('Wallet does not support transaction execution.');
+}
+
+// ─── Disconnect via Wallet Standard ───
+
+async function disconnectWallet(wallet: Wallet): Promise<void> {
+  const disconnectFeature = wallet.features?.['standard:disconnect'];
+  if (disconnectFeature && typeof disconnectFeature.disconnect === 'function') {
+    try {
+      await disconnectFeature.disconnect();
+    } catch {
+      // Ignore disconnect errors
+    }
+    return;
+  }
+  // Fallback: direct method
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = wallet as any;
+  if (typeof w.disconnect === 'function') {
+    try { await w.disconnect(); } catch { /* ignore */ }
+  }
 }
 
 // ─── Fetch real balances from testnet ───
@@ -359,24 +380,43 @@ export function useTrepaWallet(): WalletState {
   const [walletName, setWalletName] = useState('');
   const [error, setError] = useState('');
 
+  // Keep a reference to the connected wallet object and account
+  // These are NOT React state because they're mutable objects from the wallet extension
+  // that we don't control — putting them in state causes stale reference issues
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const [connectedWallet, setConnectedWallet] = useState<Wallet | null>(null);
+  const [connectedAccount, setConnectedAccount] = useState<WalletAccount | null>(null);
+
   // Check for existing wallet connection on mount
   useEffect(() => {
     let cancelled = false;
 
     const init = async () => {
       try {
-        const wallet = getPrimaryWallet();
-        if (!wallet) return;
-        const accounts = await checkExistingConnection(wallet);
-        if (cancelled) return;
-        if (accounts && accounts.length > 0) {
-          const addr = accounts[0];
-          setAddress(addr);
-          setWalletName(wallet.name);
-          const balances = await fetchAllTokenBalances(addr);
-          if (!cancelled) {
-            setSuiBalance(balances.sui);
-            setUsdcBalance(balances.usdc);
+        const wallets = getRegisteredWallets();
+        for (const wallet of wallets) {
+          const accounts = getExistingAccounts(wallet);
+          if (accounts.length > 0) {
+            // Find a Sui account
+            const suiAccount = accounts.find((a: WalletAccount) =>
+              a.chains?.some((c: string) => c.startsWith('sui:'))
+            ) ?? accounts[0];
+
+            const addr = suiAccount.address;
+            if (!addr) continue;
+
+            if (cancelled) return;
+            setAddress(addr);
+            setWalletName(wallet.name);
+            setConnectedWallet(wallet);
+            setConnectedAccount(suiAccount);
+
+            const balances = await fetchAllTokenBalances(addr);
+            if (!cancelled) {
+              setSuiBalance(balances.sui);
+              setUsdcBalance(balances.usdc);
+            }
+            break; // Connected to first available
           }
         }
       } catch {
@@ -397,11 +437,42 @@ export function useTrepaWallet(): WalletState {
         setSuiBalance(balances.sui);
         setUsdcBalance(balances.usdc);
       } catch {
-        // Balance fetch failed, keep existing values
+        // Keep existing values
       }
     }, 15000);
     return () => clearInterval(iv);
   }, [address]);
+
+  // Listen for wallet account changes
+  useEffect(() => {
+    if (!connectedWallet) return;
+
+    const eventsFeature = connectedWallet.features?.['standard:events'];
+    if (eventsFeature && typeof eventsFeature.on === 'function') {
+      const unsubscribe = eventsFeature.on('change', (event: { accounts?: WalletAccount[] }) => {
+        if (event.accounts && event.accounts.length > 0) {
+          const acc = event.accounts[0];
+          setAddress(acc.address);
+          setConnectedAccount(acc);
+          // Refresh balances
+          fetchAllTokenBalances(acc.address).then(b => {
+            setSuiBalance(b.sui);
+            setUsdcBalance(b.usdc);
+          }).catch(() => {});
+        } else {
+          // No more accounts — wallet disconnected externally
+          setAddress(undefined);
+          setSuiBalance('0.0000');
+          setUsdcBalance('0.00');
+          setWalletName('');
+          setConnectedWallet(null);
+          setConnectedAccount(null);
+        }
+      });
+
+      return unsubscribe;
+    }
+  }, [connectedWallet]);
 
   const isConnected = !!address;
   const shortAddress = address
@@ -411,71 +482,89 @@ export function useTrepaWallet(): WalletState {
   const connect = useCallback(async () => {
     setError('');
     try {
-      const wallet = getPrimaryWallet();
-      if (!wallet) {
-        setError('No Sui wallet detected. Please install the Sui Wallet browser extension and refresh this page.');
+      const wallets = getRegisteredWallets();
+
+      if (wallets.length === 0) {
+        setError('No Sui wallet detected. Install the Sui Wallet extension and refresh this page.');
         return;
       }
 
-      const accounts = await connectWallet(wallet);
-      if (accounts && accounts.length > 0) {
-        const addr = accounts[0];
-        setAddress(addr);
-        setWalletName(wallet.name);
-        setError('');
-        const balances = await fetchAllTokenBalances(addr);
-        setSuiBalance(balances.sui);
-        setUsdcBalance(balances.usdc);
-      } else {
-        setError('Wallet connection was cancelled or no accounts found.');
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to connect wallet';
-      // User rejected the connection — don't treat as error
-      if (msg.includes('reject') || msg.includes('denied') || msg.includes('cancel')) {
+      // Use the first registered wallet
+      const wallet = wallets[0];
+      const accounts = await connectStandardWallet(wallet);
+
+      if (accounts.length === 0) {
+        setError('No accounts found. Please unlock your wallet and try again.');
         return;
       }
-      setError(msg);
+
+      // Find a Sui-compatible account
+      const suiAccount = accounts.find((a: WalletAccount) =>
+        a.chains?.some((c: string) => c.startsWith('sui:'))
+      ) ?? accounts[0];
+
+      const addr = suiAccount.address;
+      if (!addr) {
+        setError('Could not get wallet address.');
+        return;
+      }
+
+      setAddress(addr);
+      setWalletName(wallet.name);
+      setConnectedWallet(wallet);
+      setConnectedAccount(suiAccount);
+      setError('');
+
+      const balances = await fetchAllTokenBalances(addr);
+      setSuiBalance(balances.sui);
+      setUsdcBalance(balances.usdc);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // User rejected — don't show an error, they chose to cancel
+      if (
+        msg.toLowerCase().includes('reject') ||
+        msg.toLowerCase().includes('denied') ||
+        msg.toLowerCase().includes('cancel') ||
+        msg.toLowerCase().includes('user')
+      ) {
+        return;
+      }
+      setError(`Connection failed: ${msg}`);
     }
   }, []);
 
-  const disconnect = useCallback(() => {
-    // Try calling wallet.disconnect() for modern wallets
-    try {
-      const wallet = getPrimaryWallet();
-      if (wallet?.isModern && typeof wallet.obj.disconnect === 'function') {
-        wallet.obj.disconnect();
-      }
-    } catch {
-      // Ignore
+  const disconnect = useCallback(async () => {
+    if (connectedWallet) {
+      await disconnectWallet(connectedWallet);
     }
     setAddress(undefined);
     setSuiBalance('0.0000');
     setUsdcBalance('0.00');
     setWalletName('');
+    setConnectedWallet(null);
+    setConnectedAccount(null);
     setError('');
-  }, []);
+  }, [connectedWallet]);
 
   const executeTransaction = useCallback(async (tx: unknown): Promise<ExecutionResult> => {
     setIsExecuting(true);
     try {
-      const wallet = getPrimaryWallet();
-      if (!wallet || !address) {
+      if (!connectedWallet || !connectedAccount || !address) {
         return {
           success: false,
           digest: '',
           gasUsed: '0 SUI',
-          error: 'No wallet connected. Connect your Sui wallet to execute transactions.',
+          error: 'No wallet connected. Connect your Sui wallet first.',
         };
       }
 
-      const result = await executeWalletTransaction(wallet, tx);
+      const result = await executeViaWallet(connectedWallet, connectedAccount, tx);
 
       if (result?.digest) {
         // Wait for finality
         await suiRpc('sui_waitForTransaction', [result.digest]);
 
-        // Get transaction details for gas info
+        // Get gas info
         let gasUsed = '~0.002 SUI';
         try {
           const txDetails = await suiRpc('sui_getTransactionBlock', [result.digest, {
@@ -487,34 +576,20 @@ export function useTrepaWallet(): WalletState {
             gasUsed = `${Number(totalGas) / 1_000_000_000} SUI`;
           }
         } catch {
-          // Keep default gas estimate
+          // Keep default
         }
 
-        return {
-          success: true,
-          digest: result.digest,
-          gasUsed,
-        };
+        return { success: true, digest: result.digest, gasUsed };
       }
 
-      return {
-        success: false,
-        digest: '',
-        gasUsed: '0 SUI',
-        error: 'No digest returned from wallet.',
-      };
+      return { success: false, digest: '', gasUsed: '0 SUI', error: 'No digest returned.' };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Transaction failed';
-      return {
-        success: false,
-        digest: '',
-        gasUsed: '0 SUI',
-        error: message,
-      };
+      return { success: false, digest: '', gasUsed: '0 SUI', error: message };
     } finally {
       setIsExecuting(false);
     }
-  }, [address]);
+  }, [connectedWallet, connectedAccount, address]);
 
   return {
     isConnected,
@@ -533,7 +608,7 @@ export function useTrepaWallet(): WalletState {
 }
 
 export function isSuiWalletAvailable(): boolean {
-  return typeof window !== 'undefined' && detectSuiWallets().length > 0;
+  return typeof window !== 'undefined' && getRegisteredWallets().length > 0;
 }
 
 export { fetchSuiBalance, fetchUsdcBalance, suiRpc };

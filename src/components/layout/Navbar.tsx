@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Sun, Moon, Menu, X, LogOut, Wallet, AlertCircle } from 'lucide-react';
+import { Sun, Moon, Menu, X, LogOut, Wallet, AlertCircle, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/hooks/useTheme';
 import { useTrepaWallet } from '@/lib/sui';
@@ -16,9 +16,19 @@ export function Navbar() {
   const { theme, setTheme } = useTheme();
   const wallet = useTrepaWallet();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [connecting, setConnecting] = useState(false);
 
   const isDark = theme === 'dark';
   const toggleTheme = () => setTheme(isDark ? 'light' : 'dark');
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    try {
+      await wallet.connect();
+    } finally {
+      setConnecting(false);
+    }
+  };
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-xl border-b border-border/50 transition-theme">
@@ -80,11 +90,16 @@ export function Navbar() {
             </div>
           ) : (
             <button
-              onClick={wallet.connect}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 active:scale-[0.97] transition-all duration-150"
+              onClick={handleConnect}
+              disabled={connecting}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 active:scale-[0.97] transition-all duration-150 disabled:opacity-60 disabled:pointer-events-none"
             >
-              <Wallet className="h-3 w-3" />
-              Connect Wallet
+              {connecting ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Wallet className="h-3 w-3" />
+              )}
+              {connecting ? 'Connecting...' : 'Connect Wallet'}
             </button>
           )}
 
@@ -104,7 +119,7 @@ export function Navbar() {
           <div className="container py-2 flex items-center gap-2 text-xs text-destructive">
             <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
             <span>{wallet.error}</span>
-            <button onClick={() => wallet.connect()} className="ml-auto text-primary hover:underline font-medium">
+            <button onClick={handleConnect} className="ml-auto text-primary hover:underline font-medium">
               Retry
             </button>
           </div>
@@ -145,11 +160,12 @@ export function Navbar() {
                 </div>
               ) : (
                 <button
-                  onClick={wallet.connect}
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-all"
+                  onClick={handleConnect}
+                  disabled={connecting}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-all disabled:opacity-60"
                 >
-                  <Wallet className="h-4 w-4" />
-                  Connect Wallet
+                  {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
+                  {connecting ? 'Connecting...' : 'Connect Wallet'}
                 </button>
               )}
             </div>
