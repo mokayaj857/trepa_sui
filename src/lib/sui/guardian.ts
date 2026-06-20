@@ -88,6 +88,22 @@ async function checkSlippage(
     ]);
   }
 
+  // If balance is 0, can't execute
+  if (address) {
+    const totalHoldings = intent.token === 'SUI' ? holdingsSui : holdingsUsdc;
+    if (totalHoldings === 0) {
+      return {
+        id: 'slippage',
+        type: 'slippage',
+        severity: 'high',
+        title: 'Insufficient Balance',
+        description: `You don't have any ${intent.token} in your wallet. The swap cannot execute.`,
+        detail: `${intent.token} balance: 0`,
+        recommendation: `Get testnet ${intent.token} from the faucet: https://faucet.sui.io`,
+      };
+    }
+  }
+
   // Estimate slippage based on trade size
   let slippagePct: number;
   let severity: RiskSeverity;
@@ -138,7 +154,7 @@ async function checkSlippage(
  * Check 2: Concentration Risk
  * Warns if all funds go into a single asset.
  */
-function checkConcentration(actions: IntentAction[], intent: ParsedIntent): RiskCheck {
+function checkConcentration(actions: IntentAction[], _intent: ParsedIntent): RiskCheck {
   const targetAssets = new Set(actions.map(a => a.toToken));
   const isSingleAsset = targetAssets.size === 1;
   const isSuiOnly = targetAssets.has('SUI') || targetAssets.has('vSUI');
@@ -183,7 +199,7 @@ function checkConcentration(actions: IntentAction[], intent: ParsedIntent): Risk
 async function checkLiquidity(
   actions: IntentAction[],
   intent: ParsedIntent,
-  address: string | undefined,
+  _address: string | undefined,
 ): Promise<RiskCheck> {
   const hasSwap = actions.some(a => a.type === 'swap');
 
@@ -198,25 +214,7 @@ async function checkLiquidity(
     };
   }
 
-  // Query real data from testnet
-  let poolTvl = 'Unknown';
-  let poolActivity = 'normal';
-
-  if (address) {
-    try {
-      const suiBal = await getRealSuiBalance(address);
-      if (suiBal > 0) {
-        poolTvl = '~$45M (testnet)';
-        poolActivity = 'moderate';
-      } else {
-        poolTvl = '~$45M (testnet)';
-        poolActivity = 'low (no SUI balance)';
-      }
-    } catch {
-      // Keep defaults
-    }
-  }
-
+  // Be honest about testnet liquidity
   const riskLevel = intent.riskLevel;
 
   if (riskLevel === 'high') {
@@ -224,9 +222,9 @@ async function checkLiquidity(
       id: 'liquidity',
       type: 'liquidity',
       severity: 'medium',
-      title: 'Stale Pool Warning',
-      description: `Pool activity: ${poolActivity}. TVL: ${poolTvl}. Testnet pools may have lower liquidity — additional execution risk.`,
-      detail: `Pool TVL: ${poolTvl}, Activity: ${poolActivity}`,
+      title: 'Testnet Liquidity Warning',
+      description: 'Testnet DEX pools have significantly lower liquidity than mainnet. Large swaps may experience extreme slippage or fail entirely.',
+      detail: 'Pool: Testnet DEX (low liquidity)',
       recommendation: 'Monitor execution closely. Consider smaller position sizes on testnet.',
     };
   }
@@ -236,8 +234,8 @@ async function checkLiquidity(
     type: 'liquidity',
     severity: 'low',
     title: 'Pool Liquidity',
-    description: `Pool activity: ${poolActivity}. TVL: ${poolTvl}. Sufficient liquidity for this trade size on testnet.`,
-    detail: `Pool TVL: ${poolTvl}, Activity: ${poolActivity}`,
+    description: 'Testnet DEX pools have limited but sufficient liquidity for this trade size. Execution should succeed.',
+    detail: 'Pool: Testnet DEX (adequate for this size)',
   };
 }
 

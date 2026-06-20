@@ -1,0 +1,16 @@
+{
+  "name": "Trepa",
+  "short_name": "Trepa",
+  "description": "The first self-funding intent engine on Sui",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0e1a",
+  "theme_color": "#4da2ff",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

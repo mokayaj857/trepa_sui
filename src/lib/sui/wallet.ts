@@ -5,7 +5,9 @@
  * Connects via the Sui Wallet Standard (window.suiWallet, window.__suiet__, etc.)
  * Falls back to read-only mode (view balances, no signing).
  *
- * No @mysten/sui dependency — uses native fetch for JSON-RPC.
+ * No @mysten/sui.js dependency — uses native fetch for JSON-RPC.
+ * Transaction building uses the ESM CDN at runtime (loaded dynamically
+ * only when the user clicks "Approve" to execute a real transaction).
  */
 
 import { useState, useCallback, useEffect } from 'react';
@@ -13,6 +15,9 @@ import { useState, useCallback, useEffect } from 'react';
 // ─── Sui Testnet RPC ───
 
 export const SUI_TESTNET_URL = 'https://fullnode.testnet.sui.io:443';
+
+// Sui System State object ID (constant on all networks)
+export const SUI_SYSTEM_STATE_OBJECT_ID = '0x5';
 
 async function suiRpc(method: string, params: unknown[]): Promise<unknown> {
   const res = await fetch(SUI_TESTNET_URL, {
@@ -43,7 +48,7 @@ export interface WalletState {
   usdcBalance: string;
   connect: () => Promise<void>;
   disconnect: () => void;
-  executePTB: (ptbBytes: string) => Promise<ExecutionResult>;
+  executeTransaction: (tx: unknown) => Promise<ExecutionResult>;
   isExecuting: boolean;
   walletName: string;
   network: string;
@@ -58,12 +63,12 @@ export interface ExecutionResult {
 
 // ─── Sui Wallet Standard ───
 
-interface SuiWallet {
+interface SuiWalletV1 {
   hasPermission: () => Promise<boolean>;
   requestPermissions: () => Promise<boolean>;
   getAccounts: () => Promise<string[]>;
   signAndExecuteTransactionBlock: (input: {
-    transactionBlock: string;
+    transactionBlock: string | unknown;
     options?: Record<string, boolean>;
   }) => Promise<{ digest: string }>;
 }
@@ -71,10 +76,10 @@ interface SuiWallet {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type WindowWithSui = Window & Record<string, any>;
 
-function getSuiWallets(): SuiWallet[] {
+function getSuiWallets(): SuiWalletV1[] {
   if (typeof window === 'undefined') return [];
   const w = window as WindowWithSui;
-  const wallets: SuiWallet[] = [];
+  const wallets: SuiWalletV1[] = [];
 
   // Standard Sui Wallet
   if (w.suiWallet && typeof w.suiWallet.signAndExecuteTransactionBlock === 'function') {
@@ -100,7 +105,7 @@ function getSuiWallets(): SuiWallet[] {
   return wallets;
 }
 
-function getPrimaryWallet(): SuiWallet | undefined {
+function getPrimaryWallet(): SuiWalletV1 | undefined {
   return getSuiWallets()[0];
 }
 
@@ -180,53 +185,17 @@ export async function fetchAllCoinBalances(owner: string): Promise<CoinBalance[]
   }
 }
 
-// ─── Build a real PTB using JSON-RPC ───
+// ─── Fetch validator list from testnet ───
 
-/**
- * Build and execute a real transaction on Sui testnet using
- * the dryRun + signAndExecuteTransactionBlock flow.
- *
- * This constructs a serialized transaction using the
- * `sui_serializeTransactionBlock` or equivalent, then
- * submits it via the wallet.
- */
-
-export interface PTBAction {
-  type: 'split_then_stake' | 'split_then_transfer' | 'move_call';
-  description: string;
-  details: Record<string, string>;
-}
-
-/**
- * Build a real staking transaction using the Sui JSON-RPC.
- * Returns a Base64-encoded TransactionBlock that can be signed.
- */
-export async function buildStakeTransaction(
-  address: string,
-  amountSui: number,
-  validatorAddress: string,
-): Promise<string> {
-  // Use sui_moveCall to construct the transaction
-  // First, we need to create a transaction that:
-  // 1. Splits coins from gas
-  // 2. Stakes them with a validator
-
-  // Use the experimental transaction builder API
-  const txKind = await suiRpc('sui_moveCall', [
-    address,
-    '0x3::sui_system::request_add_stake',
-    [],
-    [], // no type args
-    [
-      '0x5', // Sui System State object
-      String(Math.round(amountSui * 1_000_000_000)), // amount in MIST
-      validatorAddress,
-    ],
-    '100000000', // gas budget (0.1 SUI)
-    null, // gas payment (auto-select)
-  ]) as string;
-
-  return txKind;
+export async function getTestnetValidators(): Promise<string[]> {
+  try {
+    const result = await suiRpc('suix_getLatestSuiSystemState', []) as {
+      activeValidators: Array<{ suiAddress: string }>;
+    };
+    return result.activeValidators?.map(v => v.suiAddress) ?? [];
+  } catch {
+    return [];
+  }
 }
 
 // ─── Hook ───
@@ -320,46 +289,50 @@ export function useTrepaWallet(): WalletState {
     setWalletName('');
   }, []);
 
-  const executePTB = useCallback(async (ptbBytes: string): Promise<ExecutionResult> => {
+  const executeTransaction = useCallback(async (tx: unknown): Promise<ExecutionResult> => {
     setIsExecuting(true);
     try {
       const wallet = getPrimaryWallet();
-      if (wallet && address) {
-        const result = await wallet.signAndExecuteTransactionBlock?.({
-          transactionBlock: ptbBytes,
-          options: { showEffects: true, showRawEffects: true },
-        });
-
-        if (result?.digest) {
-          // Wait for finality
-          await suiRpc('sui_waitForTransaction', [result.digest]);
-
-          // Get transaction details for gas info
-          let gasUsed = '~0.002 SUI';
-          try {
-            const txDetails = await suiRpc('sui_getTransactionBlock', [result.digest, {
-              showEffects: true,
-            }]) as { effects?: { gasUsed?: { computationCost: string; storageCost: string; storageRebate: string } } };
-            if (txDetails.effects?.gasUsed) {
-              const g = txDetails.effects.gasUsed;
-              const totalGas = (BigInt(g.computationCost) + BigInt(g.storageCost) - BigInt(g.storageRebate));
-              gasUsed = `${Number(totalGas) / 1_000_000_000} SUI`;
-            }
-          } catch {
-            // Keep default gas estimate
-          }
-
-          return {
-            success: true,
-            digest: result.digest,
-            gasUsed,
-          };
-        }
+      if (!wallet || !address) {
         return {
           success: false,
           digest: '',
           gasUsed: '0 SUI',
-          error: 'No digest returned',
+          error: 'No wallet connected. Install a Sui wallet extension and switch to Testnet.',
+        };
+      }
+
+      // The wallet's signAndExecuteTransactionBlock accepts:
+      // - A TransactionBlock object (the wallet has the SDK bundled internally)
+      // - A base64-encoded BCS string
+      const result = await wallet.signAndExecuteTransactionBlock({
+        transactionBlock: tx,
+        options: { showEffects: true, showRawEffects: true },
+      });
+
+      if (result?.digest) {
+        // Wait for finality
+        await suiRpc('sui_waitForTransaction', [result.digest]);
+
+        // Get transaction details for gas info
+        let gasUsed = '~0.002 SUI';
+        try {
+          const txDetails = await suiRpc('sui_getTransactionBlock', [result.digest, {
+            showEffects: true,
+          }]) as { effects?: { gasUsed?: { computationCost: string; storageCost: string; storageRebate: string } } };
+          if (txDetails.effects?.gasUsed) {
+            const g = txDetails.effects.gasUsed;
+            const totalGas = (BigInt(g.computationCost) + BigInt(g.storageCost) - BigInt(g.storageRebate));
+            gasUsed = `${Number(totalGas) / 1_000_000_000} SUI`;
+          }
+        } catch {
+          // Keep default gas estimate
+        }
+
+        return {
+          success: true,
+          digest: result.digest,
+          gasUsed,
         };
       }
 
@@ -367,7 +340,7 @@ export function useTrepaWallet(): WalletState {
         success: false,
         digest: '',
         gasUsed: '0 SUI',
-        error: 'No wallet connected. Install Sui Wallet and switch to Testnet.',
+        error: 'No digest returned from wallet.',
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Transaction failed';
@@ -390,7 +363,7 @@ export function useTrepaWallet(): WalletState {
     usdcBalance,
     connect,
     disconnect,
-    executePTB,
+    executeTransaction,
     isExecuting,
     walletName,
     network: 'testnet',

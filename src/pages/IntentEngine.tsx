@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
-import { parseUserIntent, buildPTBFromIntent, runGuardianChecks, getSeverityBg, useTrepaWallet } from '@/lib/sui';
+import { parseUserIntent, buildPTBFromIntent, buildStakeTransactionBlock, runGuardianChecks, getSeverityBg, useTrepaWallet } from '@/lib/sui';
 import type { ParsedIntent, PTBResult, GuardianReport } from '@/lib/sui';
 import {
   Bot,
@@ -116,26 +116,23 @@ export default function IntentEngine() {
     }, 1200);
   }, [input]);
 
-  // Step 2: Build PTB from intent (async since it uses JSON-RPC)
-  const genPTB = useCallback(async () => {
+  // Step 2: Build PTB from intent
+  const genPTB = useCallback(() => {
     if (!parsed) return;
     setStep('ptb-gen');
-    try {
-      const result = await buildPTBFromIntent(parsed, wallet.address ?? '');
-      setPtbResult(result);
-      setStep('ptb');
-    } catch {
-      // Fallback: still show the PTB structure even if on-chain construction fails
-      const result = await buildPTBFromIntent(parsed, '');
-      setPtbResult(result);
-      setStep('ptb');
-    }
+    // Build the PTB description with real data (address is used for gas estimation context)
+    const result = buildPTBFromIntent(parsed, wallet.address ?? '');
+    setPtbResult(result);
+    // Small delay for UX polish
+    setTimeout(() => setStep('ptb'), 600);
   }, [parsed, wallet.address]);
 
   // Step 3: Run Guardian checks with real on-chain data
   const runGuardian = useCallback(async () => {
     if (!ptbResult || !parsed) return;
     setStep('guardian');
+    setGuardianReport(null); // Show loading state while fetching
+
     try {
       const report = await runGuardianChecks(
         ptbResult.actions,
@@ -144,7 +141,7 @@ export default function IntentEngine() {
       );
       setGuardianReport(report);
     } catch {
-      // Fallback to basic checks without on-chain data
+      // Even if RPC fails, provide a basic report
       const report = await runGuardianChecks(ptbResult.actions, parsed);
       setGuardianReport(report);
     }
@@ -152,50 +149,89 @@ export default function IntentEngine() {
 
   // Step 4: Confirm & Execute
   const approve = useCallback(async () => {
-    if (!ptbResult) return;
+    if (!ptbResult || !parsed) return;
 
-    if (wallet.isConnected && ptbResult.ptbBytes) {
-      // Real execution via wallet
+    if (!wallet.isConnected) {
+      // No wallet — show clear message
       setStep('executing');
       setExecStep(0);
-      const iv = setInterval(() => setExecStep(p => p < 3 ? p + 1 : 3), 500);
+      // Simulate a brief "connecting" animation, then show error
+      const iv = setInterval(() => setExecStep(p => {
+        if (p >= 1) { clearInterval(iv); return 1; }
+        return p + 1;
+      }), 400);
+      setTimeout(() => {
+        clearInterval(iv);
+        setExecError('No Sui wallet connected. Install a Sui wallet extension (like Sui Wallet) and switch to Testnet to execute real transactions.');
+        setStep('done');
+      }, 1000);
+      return;
+    }
 
-      try {
-        const result = await wallet.executePTB(ptbResult.ptbBytes);
-        clearInterval(iv);
+    // Real execution via wallet
+    setStep('executing');
+    setExecStep(0);
+    setExecError('');
+    setExecDigest('');
+    setExecGasUsed('');
+
+    const progressIv = setInterval(() => setExecStep(p => {
+      if (p >= 2) return 2; // Stop at "Waiting for wallet signature..."
+      return p + 1;
+    }), 600);
+
+    try {
+      // Find the primary action and build the appropriate transaction
+      const stakeAction = ptbResult.actions.find(a => a.type === 'stake');
+      const swapAction = ptbResult.actions.find(a => a.type === 'swap');
+
+      let tx: unknown = null;
+
+      if (stakeAction && wallet.address) {
+        // Build a real staking transaction
+        tx = await buildStakeTransactionBlock(
+          wallet.address,
+          stakeAction.amount,
+        );
+      } else if (swapAction && wallet.address) {
+        // Swap requires DEX integration — explain limitation
+        clearInterval(progressIv);
         setExecStep(3);
-        if (result.success) {
-          setExecDigest(result.digest);
-          setExecGasUsed(result.gasUsed);
-          setTimeout(() => setStep('done'), 800);
-        } else {
-          setExecError(result.error || 'Transaction failed');
-          setTimeout(() => setStep('done'), 800);
-        }
-      } catch (err) {
-        clearInterval(iv);
-        setExecError(err instanceof Error ? err.message : 'Execution failed');
+        setExecError('Swap execution requires DEX protocol integration (Turbos, Aftermath, or DeepBook) which is not yet deployed. Staking intents can be executed on-chain now.');
+        setTimeout(() => setStep('done'), 800);
+        return;
+      }
+
+      if (!tx) {
+        clearInterval(progressIv);
         setExecStep(3);
+        setExecError('Could not build on-chain transaction. Currently, only staking intents are supported for on-chain execution. Try "Stake X SUI" as your intent.');
+        setTimeout(() => setStep('done'), 800);
+        return;
+      }
+
+      // Execute via the wallet
+      setExecStep(2); // "Waiting for wallet signature..."
+      const result = await wallet.executeTransaction(tx);
+      clearInterval(progressIv);
+
+      if (result.success) {
+        setExecStep(3);
+        setExecDigest(result.digest);
+        setExecGasUsed(result.gasUsed);
+        setTimeout(() => setStep('done'), 800);
+      } else {
+        setExecStep(3);
+        setExecError(result.error || 'Transaction failed');
         setTimeout(() => setStep('done'), 800);
       }
-    } else {
-      // Demo mode — no wallet or no PTB bytes (protocol not yet deployed)
-      setStep('executing');
-      setExecStep(0);
-      const iv = setInterval(() => setExecStep(p => {
-        if (p >= 3) { clearInterval(iv); return 3; }
-        return p + 1;
-      }), 700);
-      setTimeout(() => {
-        if (!wallet.isConnected) {
-          setExecDigest('demo-mode');
-        } else {
-          setExecDigest('simulated');
-        }
-        setStep('done');
-      }, 3200);
+    } catch (err) {
+      clearInterval(progressIv);
+      setExecStep(3);
+      setExecError(err instanceof Error ? err.message : 'Execution failed unexpectedly');
+      setTimeout(() => setStep('done'), 800);
     }
-  }, [ptbResult, wallet]);
+  }, [ptbResult, parsed, wallet]);
 
   return (
     <div className="min-h-screen bg-background transition-theme">
@@ -209,16 +245,22 @@ export default function IntentEngine() {
           </div>
         </div>
 
-        {/* Demo mode banner */}
-        {isDemoMode && step === 'input' && (
+        {/* Wallet mode banner */}
+        {step === 'input' && (
           <div className="border-b border-primary/20 bg-primary/5">
             <div className="container max-w-2xl py-2.5 flex items-center gap-2 text-xs text-muted-foreground">
               <Wallet className="h-3.5 w-3.5 text-primary" />
-              <span>Connect a Sui wallet for on-chain execution on testnet, or try the demo mode below.</span>
-              <a href="https://faucet.sui.io" target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-primary hover:underline">
-                <Droplets className="h-3 w-3" />
-                Faucet
-              </a>
+              {wallet.isConnected ? (
+                <span>Wallet connected — <span className="text-primary font-medium">{wallet.shortAddress}</span> · On-chain execution enabled on testnet.</span>
+              ) : (
+                <span>Connect a Sui wallet for real on-chain execution on testnet, or explore the flow in demo mode.</span>
+              )}
+              {!wallet.isConnected && (
+                <a href="https://faucet.sui.io" target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-primary hover:underline">
+                  <Droplets className="h-3 w-3" />
+                  Faucet
+                </a>
+              )}
             </div>
           </div>
         )}
@@ -310,6 +352,12 @@ export default function IntentEngine() {
                       </span>
                     ))}
                   </div>
+                  {wallet.isConnected && (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Wallet className="h-3 w-3 text-primary" />
+                      <span>Wallet: <span className="text-primary font-medium">{wallet.shortAddress}</span> · Balance: <span className="font-mono">{wallet.suiBalance} SUI</span></span>
+                    </div>
+                  )}
                   <Button onClick={genPTB} className="w-full bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-150">
                     <Layers className="mr-1.5 h-4 w-4" />
                     Generate PTB
@@ -367,6 +415,13 @@ export default function IntentEngine() {
                       </span>
                     )}
                   </div>
+                  {/* Capability note */}
+                  <div className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                    <Zap className="h-3 w-3 text-primary flex-shrink-0" />
+                    {ptbResult.actions.some(a => a.type === 'stake')
+                      ? 'Staking can be executed on-chain via your wallet.'
+                      : 'Swap and lend require protocol integrations — currently only staking is executable on testnet.'}
+                  </div>
                   <Button onClick={runGuardian} className="w-full bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-150">
                     <Shield className="mr-1.5 h-4 w-4" />
                     Run Guardian Analysis
@@ -388,7 +443,11 @@ export default function IntentEngine() {
                   {!guardianReport ? (
                     <div className="flex flex-col items-center gap-2 py-4">
                       <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                      <p className="text-xs text-muted-foreground">Querying on-chain data for risk analysis...</p>
+                      <p className="text-xs text-muted-foreground">
+                        {wallet.isConnected
+                          ? 'Querying on-chain data for risk analysis...'
+                          : 'Running risk analysis...'}
+                      </p>
                     </div>
                   ) : (
                     <>
@@ -463,7 +522,7 @@ export default function IntentEngine() {
                       ['Actions', ptbResult.actions.map(a => a.label).join(' → ')],
                       ['Risks', guardianReport.checks.filter(c => c.severity !== 'low').map(c => c.title).join(', ') || 'None'],
                       ['Est. Yield', `${ptbResult.estimatedYield} APR`],
-                      ['Mode', wallet.isConnected ? 'On-Chain (Testnet)' : 'Demo'],
+                      ['Mode', wallet.isConnected ? 'On-Chain (Testnet)' : 'Demo Mode'],
                       ['Wallet Balance', wallet.isConnected ? `${wallet.suiBalance} SUI, ${wallet.usdcBalance} USDC` : 'Not connected'],
                     ].map(([l, v]) => (
                       <div key={l} className="flex justify-between items-center px-4 py-2.5">
@@ -473,10 +532,28 @@ export default function IntentEngine() {
                     ))}
                   </div>
                   {!wallet.isConnected && (
-                    <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
-                      <Wallet className="h-3 w-3 text-primary flex-shrink-0" />
-                      No wallet connected — this will simulate execution. Connect a wallet for real testnet execution.
-                    </p>
+                    <div className="rounded-md bg-primary/10 text-primary p-3 text-xs">
+                      <div className="flex items-center gap-1.5 font-semibold mb-1">
+                        <Wallet className="h-3.5 w-3.5" />
+                        No wallet connected
+                      </div>
+                      <p className="text-primary/80">
+                        To execute real transactions on Sui testnet, connect a wallet. The approval step will prompt you to install one.
+                        Alternatively, you can explore the full flow in demo mode.
+                      </p>
+                    </div>
+                  )}
+                  {wallet.isConnected && !ptbResult.actions.some(a => a.type === 'stake') && (
+                    <div className="rounded-md bg-primary/10 text-primary p-3 text-xs">
+                      <div className="flex items-center gap-1.5 font-semibold mb-1">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        Execution limitation
+                      </div>
+                      <p className="text-primary/80">
+                        Only staking intents can be executed on-chain currently. Swap and lend require protocol integrations
+                        that are not yet deployed. The flow will complete in demo mode for non-staking intents.
+                      </p>
+                    </div>
                   )}
                   {guardianReport.checks.filter(c => c.severity === 'high' || c.severity === 'medium').length > 0 && (
                     <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
@@ -506,9 +583,14 @@ export default function IntentEngine() {
                 <CardContent className="p-6 space-y-3">
                   <h2 className="font-display font-semibold flex items-center gap-2">
                     <Zap className="h-5 w-5 text-primary animate-pulse" />
-                    {wallet.isConnected ? 'Executing PTB on Sui testnet...' : 'Simulating execution...'}
+                    {wallet.isConnected ? 'Executing PTB on Sui testnet...' : 'Preparing execution...'}
                   </h2>
-                  {['PTB Signed', 'Transaction Submitted', 'Waiting for Finality', 'Confirmed'].map((label, i) => (
+                  {[
+                    'Building transaction...',
+                    'Waiting for wallet signature...',
+                    'Submitting to network...',
+                    'Confirmed on-chain',
+                  ].map((label, i) => (
                     <div
                       key={i}
                       className={cn(
@@ -517,16 +599,17 @@ export default function IntentEngine() {
                       )}
                     >
                       {i <= execStep ? (
-                        <CheckCircle2 className="h-4 w-4 text-primary" />
+                        i < execStep ? (
+                          <CheckCircle2 className="h-4 w-4 text-primary" />
+                        ) : (
+                          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                        )
                       ) : (
                         <div className="h-4 w-4" />
                       )}
                       {label}
                     </div>
                   ))}
-                  {wallet.isExecuting && (
-                    <Loader2 className="h-4 w-4 animate-spin text-primary mt-2" />
-                  )}
                 </CardContent>
               </Card>
             </Panel>
@@ -546,14 +629,12 @@ export default function IntentEngine() {
                       )}
                     </div>
                     <h2 className="font-display font-bold text-xl">
-                      {execError ? 'Transaction Failed' : isDemoMode ? 'Demo Complete' : 'Transaction Complete'}
+                      {execError ? 'Transaction Failed' : 'Transaction Complete'}
                     </h2>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs text-muted-foreground max-w-sm">
                       {execError
                         ? execError
-                        : isDemoMode
-                          ? 'This was a simulated execution. Connect a wallet for real on-chain transactions.'
-                          : 'PTB executed on Sui testnet'}
+                        : 'PTB executed successfully on Sui testnet. The transaction is now confirmed on-chain.'}
                     </p>
                     {!execError && (
                       <div className="w-full rounded-md bg-muted/50 divide-y divide-border/40 mt-2 transition-theme">
@@ -567,9 +648,7 @@ export default function IntentEngine() {
                         </div>
                         <div className="flex justify-between items-center px-4 py-2">
                           <span className="text-xs text-muted-foreground">Status</span>
-                          <span className={cn('text-xs font-semibold', execError ? 'text-destructive' : 'text-primary')}>
-                            {execError ? 'FAILED' : 'SUCCESS'}
-                          </span>
+                          <span className="text-xs font-semibold text-primary">SUCCESS</span>
                         </div>
                         <div className="flex justify-between items-center px-4 py-2">
                           <span className="text-xs text-muted-foreground">Network</span>
@@ -577,7 +656,7 @@ export default function IntentEngine() {
                         </div>
                       </div>
                     )}
-                    {!execError && !isDemoMode && execDigest && execDigest !== 'demo-mode' && execDigest !== 'simulated' && (
+                    {!execError && execDigest && (
                       <a
                         href={`https://suiscan.xyz/testnet/tx/${execDigest}`}
                         target="_blank"

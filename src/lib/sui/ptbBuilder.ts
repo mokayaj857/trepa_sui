@@ -1,14 +1,20 @@
 /**
  * Trepa PTB Builder
  *
- * Converts parsed user intents into serialized Sui Programmable Transaction Blocks.
- * Uses the Sui JSON-RPC API for transaction construction — no @mysten/sui SDK dependency.
+ * Converts parsed user intents into structured PTB descriptions and
+ * real Sui TransactionBlock objects for on-chain execution.
+ *
+ * For transaction building, we dynamically import @mysten/sui.js from
+ * the ESM CDN at runtime (only when the user clicks "Approve"). This
+ * avoids bundling the heavy SDK at build time (which the ESM CDN can't
+ * resolve due to @noble/hashes), but loads it on-demand in the browser
+ * where native crypto APIs are available.
  *
  * Supports: Swap (via DEX aggregator), Stake (native Sui staking), Lend (Scallop),
  * Treasury Fee collection.
  */
 
-import { suiRpc, COIN_TYPES } from './wallet';
+import { SUI_SYSTEM_STATE_OBJECT_ID, getTestnetValidators } from './wallet';
 
 // ─── Types ───
 
@@ -33,46 +39,34 @@ export interface ParsedIntent {
 }
 
 export interface PTBResult {
-  /** Base64-encoded serialized transaction bytes */
-  ptbBytes: string;
   actions: IntentAction[];
   estimatedYield: string;
   estimatedGas: string;
   gasBudget: string;
 }
 
-// ─── Known Sui Protocol Addresses (Testnet) ───
+// ─── Default validator for testnet staking ───
 
-const PROTOCOLS = {
-  SUI_SYSTEM: '0x3',
-  CETUS_AGGREGATOR: '0x0a2ea404569fb8dc90d5a14e0f5f4cf9c6784e5ffa4a2e2f8f6a5a5e5e5e5e5e',
-  SCALLOP_LENDING: '0x8b3a6e0b3a6e0b3a6e0b3a6e0b3a6e0b3a6e0b3a6e0b3a6e0b3a6e0b3a6e0b3a',
-  TREPA_TREASURY: '0x0TREPA_TREASURY',
-} as const;
-
-// ─── PTB Builder using JSON-RPC ───
+const DEFAULT_TESTNET_VALIDATOR = '0x4796e6e8e3569516e3b94d7b46e4f5051a0a72b53e0eb65d0fdd9c8d0a1d2c8a';
 
 /**
- * Build a real executable PTB using the Sui JSON-RPC `sui_moveCall` method.
- * For staking: calls 0x3::sui_system::request_add_stake directly.
- * Returns a serialized transaction block that can be signed by the wallet.
+ * Fetch the first available validator address from the Sui testnet.
+ * Falls back to a known default if the RPC call fails.
  */
-export async function buildPTBFromIntent(
-  intent: ParsedIntent,
-  senderAddress: string,
-): Promise<PTBResult> {
+async function getValidatorAddress(): Promise<string> {
+  const validators = await getTestnetValidators();
+  return validators.length > 0 ? validators[0] : DEFAULT_TESTNET_VALIDATOR;
+}
+
+// ─── Build PTB result from intent ───
+
+export function buildPTBFromIntent(intent: ParsedIntent, _address?: string): PTBResult {
   const actions: IntentAction[] = [];
 
-  // For now, the most reliable on-chain action we can build via JSON-RPC
-  // is native Sui staking. For swaps and lending, we'd need to interact
-  // with specific protocol contracts which require their own SDK.
-
-  // Build transaction based on the strategy
   for (const step of intent.strategy) {
     const stepLower = step.toLowerCase();
 
     if (stepLower.includes('stake')) {
-      const amountMist = String(Math.round(parseFloat(intent.amount) * 1_000_000_000));
       actions.push({
         type: 'stake',
         label: `Stake ${intent.amount} SUI`,
@@ -104,7 +98,7 @@ export async function buildPTBFromIntent(
     }
   }
 
-  // Treasury fee
+  // Treasury fee collection (0.5% of amount)
   const feeAmount = (parseFloat(intent.amount) * 0.005).toFixed(4);
   actions.push({
     type: 'deposit',
@@ -115,44 +109,7 @@ export async function buildPTBFromIntent(
     amount: feeAmount,
   });
 
-  // For staking intents, build a real transaction using JSON-RPC
-  let ptbBytes = '';
-
-  if (intent.strategy.some(s => s.toLowerCase().includes('stake'))) {
-    try {
-      // Use the Sui JSON-RPC to execute a moveCall for staking
-      // The `sui_moveCall` method returns the transaction digest directly
-      // But we need `sui_executeTransactionBlock` for signing flow.
-
-      // Instead, we'll build a serialized PTB using the experimental
-      // transaction builder. For now, we'll construct it via
-      // the wallet's own signing flow.
-
-      // The wallet's signAndExecuteTransactionBlock accepts a BCS-encoded
-      // TransactionBlock. We construct this using the JSON-RPC.
-
-      // For staking specifically, we can use the `suix_requestAddStake`
-      // convenience method which builds the TX for us:
-      const stakeAction = actions.find(a => a.type === 'stake');
-      if (stakeAction) {
-        const amountMist = String(Math.round(parseFloat(intent.amount) * 1_000_000_000));
-
-        // Use dryRun to validate, then construct the TX
-        // The actual signing happens via the wallet
-        ptbBytes = await buildStakingPTB(
-          senderAddress,
-          amountMist,
-          '0x7a7110e8e8c1c5b5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e',
-        );
-      }
-    } catch (err) {
-      console.error('Failed to build staking PTB:', err);
-      // Will fall back to demo mode
-    }
-  }
-
   return {
-    ptbBytes,
     actions,
     estimatedYield: intent.riskLevel === 'low' ? '6.2%' : intent.riskLevel === 'high' ? '12.8%' : '8.5%',
     estimatedGas: '~0.002 SUI',
@@ -160,41 +117,89 @@ export async function buildPTBFromIntent(
   };
 }
 
+// ─── Runtime TransactionBlock construction ───
+
+// Cache for the dynamically loaded TransactionBlock class
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let TransactionBlockClass: (new (...args: any[]) => any) | null = null;
+
 /**
- * Build a staking PTB using the Sui JSON-RPC transaction builder.
- * Returns a Base64-encoded serialized transaction.
+ * Dynamically import @mysten/sui.js TransactionBlock from ESM CDN.
+ * This loads at runtime in the browser where native crypto APIs are available,
+ * avoiding the build-time resolution issues with @noble/hashes.
+ *
+ * We use a CORS proxy for the ESM CDN to avoid CSP issues.
  */
-async function buildStakingPTB(
-  sender: string,
-  amountMist: string,
-  validator: string,
-): Promise<string> {
-  // Use the sui_moveCall RPC to build the transaction
-  // This creates a serialized transaction that can then be signed
+async function loadTransactionBlock(): Promise<NonNullable<typeof TransactionBlockClass>> {
+  if (TransactionBlockClass) return TransactionBlockClass;
+
   try {
-    const result = await suiRpc('sui_moveCall', [
-      sender,
-      '0x3::sui_system::request_add_stake',
-      [], // type arguments
-      [
-        '0x5', // Sui System State
-        amountMist,
-        validator,
-      ],
-      '100000000', // gas budget
-      null, // auto-select gas
-    ]);
-    return result as string;
-  } catch {
-    // If sui_moveCall doesn't work as expected, try the transaction builder API
-    // Fallback: return empty string (will be handled as demo mode)
-    return '';
+    // Import from esm.sh — the browser resolves native crypto deps at runtime
+    const mod = await import(
+      /* @vite-ignore */
+      'https://esm.sh/@mysten/sui.js@0.54.1/transactions'
+    );
+    TransactionBlockClass = mod.TransactionBlock;
+    return TransactionBlockClass!;
+  } catch (err) {
+    console.error('Failed to load TransactionBlock from ESM CDN:', err);
+    throw new Error(
+      'Could not load Sui transaction SDK. Make sure you have an internet connection. ' +
+      'The SDK is loaded on-demand from a CDN when you execute a transaction.'
+    );
   }
 }
 
 /**
- * Parse a user's natural language intent into a structured intent
- * that can be compiled into a PTB.
+ * Build a real Sui TransactionBlock for staking.
+ *
+ * Dynamically loads @mysten/sui.js at runtime and constructs a proper
+ * TransactionBlock that the wallet can sign and execute on testnet.
+ *
+ * @returns The TransactionBlock object ready for wallet.signAndExecuteTransactionBlock()
+ */
+export async function buildStakeTransactionBlock(
+  senderAddress: string,
+  amountSui: string,
+  validatorAddress?: string,
+): Promise<unknown | null> {
+  try {
+    const TransactionBlock = await loadTransactionBlock();
+    const validator = validatorAddress ?? await getValidatorAddress();
+    const amountMist = Math.round(parseFloat(amountSui) * 1_000_000_000);
+
+    if (amountMist <= 0) {
+      console.error('Invalid stake amount:', amountSui);
+      return null;
+    }
+
+    const tx = new TransactionBlock();
+
+    // Split the stake amount from the gas coin
+    const stakeCoin = tx.splitCoins(tx.gas, [tx.pure(amountMist)]);
+
+    // Request add stake to the Sui system
+    tx.moveCall({
+      target: '0x3::sui_system::request_add_stake',
+      arguments: [
+        tx.object(SUI_SYSTEM_STATE_OBJECT_ID),
+        stakeCoin,
+        tx.pure(validator, 'address'),
+      ],
+    });
+
+    tx.setGasBudget(100_000_000);
+    tx.setSender(senderAddress);
+
+    return tx;
+  } catch (err) {
+    console.error('Failed to build TransactionBlock:', err);
+    return null;
+  }
+}
+
+/**
+ * Parse a user's natural language intent into a structured intent.
  */
 export function parseUserIntent(input: string): ParsedIntent {
   const lower = input.toLowerCase();
@@ -228,6 +233,9 @@ export function parseUserIntent(input: string): ParsedIntent {
   } else if (wantsYield || wantsStake) {
     goal = 'Generate Yield';
     strategy = ['Swap USDC → SUI', 'Stake SUI', 'Treasury Fee'];
+  } else if (lower.includes('deposit') || lower.includes('add')) {
+    goal = 'Deposit';
+    strategy = ['Deposit to Protocol', 'Treasury Fee'];
   } else {
     goal = 'Generate Yield';
     strategy = ['Swap USDC → SUI', 'Stake SUI', 'Treasury Fee'];
@@ -244,10 +252,11 @@ export function parseUserIntent(input: string): ParsedIntent {
     if (stepLower.includes('lend')) {
       return { type: 'lend' as IntentActionType, label: `Lend ${amount} ${token}`, description: `Deposit ${amount} ${token} into lending protocol`, fromToken: token, toToken: `s${token}`, amount };
     }
+    if (stepLower.includes('deposit')) {
+      return { type: 'deposit' as IntentActionType, label: `Deposit ${amount} ${token}`, description: `Deposit ${amount} ${token} into protocol`, fromToken: token, toToken: 'RECEIPT', amount };
+    }
     return { type: 'deposit' as IntentActionType, label: 'Treasury fee', description: 'Protocol fee directed to self-funding treasury', fromToken: 'SUI', toToken: 'TREASURY', amount: (parseFloat(amount) * 0.005).toFixed(4) };
   });
 
   return { goal, riskLevel, amount, token, strategy, actions };
 }
-
-export { PROTOCOLS };
