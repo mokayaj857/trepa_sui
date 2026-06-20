@@ -1,8 +1,8 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Sun, Moon, Menu, X, LogOut, Wallet, ExternalLink } from 'lucide-react';
+import { Sun, Moon, Menu, X, LogOut, Wallet, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/hooks/useTheme';
-import { useTrepaWallet, isSuiWalletAvailable } from '@/lib/sui';
+import { useTrepaWallet } from '@/lib/sui';
 import { useState } from 'react';
 
 const navLinks = [
@@ -84,8 +84,7 @@ export function Navbar() {
               className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 active:scale-[0.97] transition-all duration-150"
             >
               <Wallet className="h-3 w-3" />
-              {isSuiWalletAvailable() ? 'Connect Wallet' : 'Get Sui Wallet'}
-              {!isSuiWalletAvailable() && <ExternalLink className="h-2.5 w-2.5" />}
+              Connect Wallet
             </button>
           )}
 
@@ -98,6 +97,19 @@ export function Navbar() {
           </button>
         </div>
       </div>
+
+      {/* Wallet connection error */}
+      {wallet.error && !wallet.isConnected && (
+        <div className="border-t border-destructive/20 bg-destructive/5">
+          <div className="container py-2 flex items-center gap-2 text-xs text-destructive">
+            <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+            <span>{wallet.error}</span>
+            <button onClick={() => wallet.connect()} className="ml-auto text-primary hover:underline font-medium">
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Mobile dropdown */}
       {mobileOpen && (
@@ -137,7 +149,7 @@ export function Navbar() {
                   className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-all"
                 >
                   <Wallet className="h-4 w-4" />
-                  {isSuiWalletAvailable() ? 'Connect Sui Wallet' : 'Get Sui Wallet'}
+                  Connect Wallet
                 </button>
               )}
             </div>
