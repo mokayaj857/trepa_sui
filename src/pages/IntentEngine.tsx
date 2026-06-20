@@ -25,6 +25,7 @@ import {
   Landmark,
   TrendingUp,
   Wallet,
+  Droplets,
 } from 'lucide-react';
 
 type Step = 'input' | 'parsing' | 'parsed' | 'ptb-gen' | 'ptb' | 'guardian' | 'confirm' | 'executing' | 'done';
@@ -75,6 +76,7 @@ export default function IntentEngine() {
   const [execStep, setExecStep] = useState(0);
   const [execDigest, setExecDigest] = useState('');
   const [execError, setExecError] = useState('');
+  const [execGasUsed, setExecGasUsed] = useState('');
 
   const activeStepIdx = stepIndexMap[step];
   const flowSteps = STEPS.map((s, i) => ({
@@ -93,6 +95,7 @@ export default function IntentEngine() {
     setExecStep(0);
     setExecDigest('');
     setExecError('');
+    setExecGasUsed('');
   }, []);
 
   // Step 1: Parse the user's intent
@@ -113,43 +116,57 @@ export default function IntentEngine() {
     }, 1200);
   }, [input]);
 
-  // Step 2: Build PTB from intent
-  const genPTB = useCallback(() => {
+  // Step 2: Build PTB from intent (async since it uses JSON-RPC)
+  const genPTB = useCallback(async () => {
     if (!parsed) return;
     setStep('ptb-gen');
-    setTimeout(() => {
-      const result = buildPTBFromIntent(parsed);
+    try {
+      const result = await buildPTBFromIntent(parsed, wallet.address ?? '');
       setPtbResult(result);
       setStep('ptb');
-    }, 1000);
-  }, [parsed]);
+    } catch {
+      // Fallback: still show the PTB structure even if on-chain construction fails
+      const result = await buildPTBFromIntent(parsed, '');
+      setPtbResult(result);
+      setStep('ptb');
+    }
+  }, [parsed, wallet.address]);
 
-  // Step 3: Run Guardian checks
-  const runGuardian = useCallback(() => {
+  // Step 3: Run Guardian checks with real on-chain data
+  const runGuardian = useCallback(async () => {
     if (!ptbResult || !parsed) return;
     setStep('guardian');
-    setTimeout(() => {
-      const report = runGuardianChecks(ptbResult.actions, parsed);
+    try {
+      const report = await runGuardianChecks(
+        ptbResult.actions,
+        parsed,
+        wallet.address,
+      );
       setGuardianReport(report);
-    }, 600);
-  }, [ptbResult, parsed]);
+    } catch {
+      // Fallback to basic checks without on-chain data
+      const report = await runGuardianChecks(ptbResult.actions, parsed);
+      setGuardianReport(report);
+    }
+  }, [ptbResult, parsed, wallet.address]);
 
   // Step 4: Confirm & Execute
   const approve = useCallback(async () => {
     if (!ptbResult) return;
 
-    if (wallet.isConnected) {
+    if (wallet.isConnected && ptbResult.ptbBytes) {
       // Real execution via wallet
       setStep('executing');
       setExecStep(0);
       const iv = setInterval(() => setExecStep(p => p < 3 ? p + 1 : 3), 500);
 
       try {
-        const result = await wallet.executePTB(ptbResult.ptb);
+        const result = await wallet.executePTB(ptbResult.ptbBytes);
         clearInterval(iv);
         setExecStep(3);
         if (result.success) {
           setExecDigest(result.digest);
+          setExecGasUsed(result.gasUsed);
           setTimeout(() => setStep('done'), 800);
         } else {
           setExecError(result.error || 'Transaction failed');
@@ -162,7 +179,7 @@ export default function IntentEngine() {
         setTimeout(() => setStep('done'), 800);
       }
     } else {
-      // Demo mode — simulate execution
+      // Demo mode — no wallet or no PTB bytes (protocol not yet deployed)
       setStep('executing');
       setExecStep(0);
       const iv = setInterval(() => setExecStep(p => {
@@ -170,7 +187,11 @@ export default function IntentEngine() {
         return p + 1;
       }), 700);
       setTimeout(() => {
-        setExecDigest('0x' + Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('') + '...');
+        if (!wallet.isConnected) {
+          setExecDigest('demo-mode');
+        } else {
+          setExecDigest('simulated');
+        }
         setStep('done');
       }, 3200);
     }
@@ -193,7 +214,11 @@ export default function IntentEngine() {
           <div className="border-b border-primary/20 bg-primary/5">
             <div className="container max-w-2xl py-2.5 flex items-center gap-2 text-xs text-muted-foreground">
               <Wallet className="h-3.5 w-3.5 text-primary" />
-              <span>Connect a Sui wallet for on-chain execution, or try the demo mode below.</span>
+              <span>Connect a Sui wallet for on-chain execution on testnet, or try the demo mode below.</span>
+              <a href="https://faucet.sui.io" target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-primary hover:underline">
+                <Droplets className="h-3 w-3" />
+                Faucet
+              </a>
             </div>
           </div>
         )}
@@ -329,12 +354,18 @@ export default function IntentEngine() {
                       </div>
                     ))}
                   </div>
-                  <div className="flex items-center gap-3 text-xs">
+                  <div className="flex items-center gap-3 text-xs flex-wrap">
                     <span className="flex items-center gap-1 px-2 py-1 rounded bg-primary/10 text-primary font-medium">
                       <TrendingUp className="h-3 w-3" />
                       Est. Yield: {ptbResult.estimatedYield} APR
                     </span>
                     <span className="text-muted-foreground">Gas: {ptbResult.estimatedGas}</span>
+                    {wallet.isConnected && (
+                      <span className="flex items-center gap-1 px-2 py-1 rounded bg-primary/10 text-primary font-medium">
+                        <Wallet className="h-3 w-3" />
+                        SUI: {wallet.suiBalance}
+                      </span>
+                    )}
                   </div>
                   <Button onClick={runGuardian} className="w-full bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-150">
                     <Shield className="mr-1.5 h-4 w-4" />
@@ -357,7 +388,7 @@ export default function IntentEngine() {
                   {!guardianReport ? (
                     <div className="flex flex-col items-center gap-2 py-4">
                       <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                      <p className="text-xs text-muted-foreground">Inspecting PTB for risks...</p>
+                      <p className="text-xs text-muted-foreground">Querying on-chain data for risk analysis...</p>
                     </div>
                   ) : (
                     <>
@@ -432,7 +463,8 @@ export default function IntentEngine() {
                       ['Actions', ptbResult.actions.map(a => a.label).join(' → ')],
                       ['Risks', guardianReport.checks.filter(c => c.severity !== 'low').map(c => c.title).join(', ') || 'None'],
                       ['Est. Yield', `${ptbResult.estimatedYield} APR`],
-                      ['Mode', wallet.isConnected ? 'On-Chain (Wallet)' : 'Demo'],
+                      ['Mode', wallet.isConnected ? 'On-Chain (Testnet)' : 'Demo'],
+                      ['Wallet Balance', wallet.isConnected ? `${wallet.suiBalance} SUI, ${wallet.usdcBalance} USDC` : 'Not connected'],
                     ].map(([l, v]) => (
                       <div key={l} className="flex justify-between items-center px-4 py-2.5">
                         <span className="text-xs text-muted-foreground">{l}</span>
@@ -443,7 +475,7 @@ export default function IntentEngine() {
                   {!wallet.isConnected && (
                     <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
                       <Wallet className="h-3 w-3 text-primary flex-shrink-0" />
-                      No wallet connected — this will simulate execution. Connect a wallet for on-chain execution.
+                      No wallet connected — this will simulate execution. Connect a wallet for real testnet execution.
                     </p>
                   )}
                   {guardianReport.checks.filter(c => c.severity === 'high' || c.severity === 'medium').length > 0 && (
@@ -474,7 +506,7 @@ export default function IntentEngine() {
                 <CardContent className="p-6 space-y-3">
                   <h2 className="font-display font-semibold flex items-center gap-2">
                     <Zap className="h-5 w-5 text-primary animate-pulse" />
-                    {wallet.isConnected ? 'Executing PTB on-chain...' : 'Simulating execution...'}
+                    {wallet.isConnected ? 'Executing PTB on Sui testnet...' : 'Simulating execution...'}
                   </h2>
                   {['PTB Signed', 'Transaction Submitted', 'Waiting for Finality', 'Confirmed'].map((label, i) => (
                     <div
@@ -514,20 +546,24 @@ export default function IntentEngine() {
                       )}
                     </div>
                     <h2 className="font-display font-bold text-xl">
-                      {execError ? 'Transaction Failed' : 'Transaction Complete'}
+                      {execError ? 'Transaction Failed' : isDemoMode ? 'Demo Complete' : 'Transaction Complete'}
                     </h2>
                     <p className="text-xs text-muted-foreground">
-                      {execError ? execError : wallet.isConnected ? 'PTB executed on Sui' : 'Demo execution complete'}
+                      {execError
+                        ? execError
+                        : isDemoMode
+                          ? 'This was a simulated execution. Connect a wallet for real on-chain transactions.'
+                          : 'PTB executed on Sui testnet'}
                     </p>
                     {!execError && (
                       <div className="w-full rounded-md bg-muted/50 divide-y divide-border/40 mt-2 transition-theme">
                         <div className="flex justify-between items-center px-4 py-2">
                           <span className="text-xs text-muted-foreground">Digest</span>
-                          <span className="text-xs font-mono text-primary">{execDigest || '0xA3f2...8b9c'}</span>
+                          <span className="text-xs font-mono text-primary break-all">{execDigest || 'N/A'}</span>
                         </div>
                         <div className="flex justify-between items-center px-4 py-2">
-                          <span className="text-xs text-muted-foreground">Gas</span>
-                          <span className="text-xs">{ptbResult?.estimatedGas ?? '~0.002 SUI'}</span>
+                          <span className="text-xs text-muted-foreground">Gas Used</span>
+                          <span className="text-xs">{execGasUsed || ptbResult?.estimatedGas || '~0.002 SUI'}</span>
                         </div>
                         <div className="flex justify-between items-center px-4 py-2">
                           <span className="text-xs text-muted-foreground">Status</span>
@@ -535,7 +571,22 @@ export default function IntentEngine() {
                             {execError ? 'FAILED' : 'SUCCESS'}
                           </span>
                         </div>
+                        <div className="flex justify-between items-center px-4 py-2">
+                          <span className="text-xs text-muted-foreground">Network</span>
+                          <span className="text-xs">Sui Testnet</span>
+                        </div>
                       </div>
+                    )}
+                    {!execError && !isDemoMode && execDigest && execDigest !== 'demo-mode' && execDigest !== 'simulated' && (
+                      <a
+                        href={`https://suiscan.xyz/testnet/tx/${execDigest}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-primary hover:underline flex items-center gap-1 mt-1"
+                      >
+                        View on SuiScan
+                        <ChevronRight className="h-3 w-3" />
+                      </a>
                     )}
                   </CardContent>
                 </Card>
@@ -551,7 +602,7 @@ export default function IntentEngine() {
                         <div className="grid grid-cols-3 gap-2">
                           {[
                             { icon: <Wallet className="h-4 w-4" />, label: 'Fees', value: `${(parseFloat(parsed?.amount ?? '0') * 0.005).toFixed(4)} SUI` },
-                            { icon: <TrendingUp className="h-4 w-4" />, label: 'Yield', value: `${ptbResult?.estimatedYield ?? '6.2%'} APR` },
+                            { icon: <TrendingUp className="h-4 w-4" />, label: 'Yield', value: `${ptbResult?.estimatedYield || '6.2%'} APR` },
                             { icon: <Landmark className="h-4 w-4" />, label: 'Treasury', value: `+${(parseFloat(parsed?.amount ?? '0') * 0.005).toFixed(4)} SUI` },
                           ].map(item => (
                             <div key={item.label} className="text-center p-2 rounded-md bg-muted/50 transition-theme">

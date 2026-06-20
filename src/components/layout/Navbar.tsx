@@ -68,6 +68,8 @@ export function Navbar() {
             <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-primary/10 text-primary text-xs font-medium">
               <Wallet className="h-3 w-3" />
               <span>{wallet.shortAddress}</span>
+              <span className="text-muted-foreground">·</span>
+              <span className="font-mono">{wallet.suiBalance} SUI</span>
               <button
                 onClick={() => wallet.disconnect()}
                 className="ml-1 h-4 w-4 rounded flex items-center justify-center hover:text-destructive transition-colors"
@@ -122,7 +124,11 @@ export function Navbar() {
             <div className="pt-2">
               {wallet.isConnected ? (
                 <div className="flex items-center justify-between px-3 py-2 rounded-md bg-primary/10 text-xs font-medium text-primary">
-                  <span>{wallet.shortAddress}</span>
+                  <div className="flex items-center gap-2">
+                    <Wallet className="h-3 w-3" />
+                    <span>{wallet.shortAddress}</span>
+                    <span className="font-mono">{wallet.suiBalance} SUI</span>
+                  </div>
                   <button onClick={() => wallet.disconnect()} className="text-destructive hover:underline">Disconnect</button>
                 </div>
               ) : (
