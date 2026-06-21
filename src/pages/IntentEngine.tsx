@@ -151,18 +151,16 @@ export default function IntentEngine() {
   const approve = useCallback(async () => {
     if (!ptbResult || !parsed) return;
 
-    if (!wallet.isConnected) {
-      // No wallet — show clear message
+    if (!wallet.isConnected || !wallet.address) {
       setStep('executing');
       setExecStep(0);
-      // Simulate a brief "connecting" animation, then show error
       const iv = setInterval(() => setExecStep(p => {
         if (p >= 1) { clearInterval(iv); return 1; }
         return p + 1;
       }), 400);
       setTimeout(() => {
         clearInterval(iv);
-        setExecError('No Slush wallet connected. Install the Slush extension and switch to Testnet to execute real transactions.');
+        setExecError('Wallet not connected. Click Connect Wallet in the navbar, choose Slush, and approve on Sui Testnet.');
         setStep('done');
       }, 1000);
       return;
@@ -231,7 +229,7 @@ export default function IntentEngine() {
       setExecError(err instanceof Error ? err.message : 'Execution failed unexpectedly');
       setTimeout(() => setStep('done'), 800);
     }
-  }, [ptbResult, parsed, wallet]);
+  }, [ptbResult, parsed, wallet.isConnected, wallet.address, wallet.executeTransaction]);
 
   return (
     <div className="min-h-screen bg-background transition-theme">

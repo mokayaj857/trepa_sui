@@ -11,6 +11,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NostrLoginProvider } from '@nostrify/react/login';
 import { AppProvider } from '@/components/AppProvider';
+import { TrepaWalletProvider } from '@/lib/sui';
 import { AppConfig } from '@/contexts/AppContext';
 import { APP_RELAYS } from '@/lib/appRelays';
 import AppRouter from './AppRouter';
@@ -49,6 +50,7 @@ export function App() {
   return (
     <UnheadProvider head={head}>
       <AppProvider storageKey="nostr:app-config" defaultConfig={defaultConfig}>
+        <TrepaWalletProvider>
         <QueryClientProvider client={queryClient}>
           <NostrLoginProvider storageKey='nostr:login'>
             <NostrProvider>
@@ -62,6 +64,7 @@ export function App() {
             </NostrProvider>
           </NostrLoginProvider>
         </QueryClientProvider>
+        </TrepaWalletProvider>
       </AppProvider>
     </UnheadProvider>
   );

@@ -3,6 +3,7 @@ import { Sun, Moon, Menu, X, LogOut, Wallet, AlertCircle, Loader2 } from 'lucide
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/hooks/useTheme';
 import { useTrepaWallet } from '@/lib/sui';
+import { ConnectWalletDialog } from '@/components/wallet/ConnectWalletDialog';
 import { useState } from 'react';
 
 const navLinks = [
@@ -16,18 +17,26 @@ export function Navbar() {
   const { theme, setTheme } = useTheme();
   const wallet = useTrepaWallet();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
   const [connecting, setConnecting] = useState(false);
 
   const isDark = theme === 'dark';
   const toggleTheme = () => setTheme(isDark ? 'light' : 'dark');
 
-  const handleConnect = async () => {
+  const handleConnect = async (walletKey?: string) => {
     setConnecting(true);
     try {
-      await wallet.connect();
+      const connected = await wallet.connect(walletKey);
+      if (connected) {
+        setConnectOpen(false);
+      }
     } finally {
       setConnecting(false);
     }
+  };
+
+  const openConnectDialog = () => {
+    setConnectOpen(true);
   };
 
   return (
@@ -90,7 +99,7 @@ export function Navbar() {
             </div>
           ) : (
             <button
-              onClick={handleConnect}
+              onClick={openConnectDialog}
               disabled={connecting}
               className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 active:scale-[0.97] transition-all duration-150 disabled:opacity-60 disabled:pointer-events-none"
             >
@@ -119,7 +128,7 @@ export function Navbar() {
           <div className="container py-2 flex items-center gap-2 text-xs text-destructive">
             <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
             <span>{wallet.error}</span>
-            <button onClick={handleConnect} className="ml-auto text-primary hover:underline font-medium">
+            <button onClick={openConnectDialog} className="ml-auto text-primary hover:underline font-medium">
               Retry
             </button>
           </div>
@@ -160,7 +169,7 @@ export function Navbar() {
                 </div>
               ) : (
                 <button
-                  onClick={handleConnect}
+                  onClick={openConnectDialog}
                   disabled={connecting}
                   className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-all disabled:opacity-60"
                 >
@@ -172,6 +181,14 @@ export function Navbar() {
           </div>
         </div>
       )}
+
+      <ConnectWalletDialog
+        open={connectOpen}
+        onOpenChange={setConnectOpen}
+        wallets={wallet.availableWallets}
+        connecting={connecting}
+        onConnect={(name) => void handleConnect(name)}
+      />
     </nav>
   );
 }

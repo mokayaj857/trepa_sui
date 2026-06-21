@@ -2,18 +2,13 @@
  * Trepa PTB Builder
  *
  * Converts parsed user intents into structured PTB descriptions and
- * real Sui TransactionBlock objects for on-chain execution.
- *
- * For transaction building, we dynamically import @mysten/sui.js from
- * the ESM CDN at runtime (only when the user clicks "Approve"). This
- * avoids bundling the heavy SDK at build time (which the ESM CDN can't
- * resolve due to @noble/hashes), but loads it on-demand in the browser
- * where native crypto APIs are available.
+ * Sui Transaction objects for on-chain execution via Slush / Wallet Standard.
  *
  * Supports: Swap (via DEX aggregator), Stake (native Sui staking), Lend (Scallop),
  * Treasury Fee collection.
  */
 
+import { Transaction } from '@mysten/sui/transactions';
 import { SUI_SYSTEM_STATE_OBJECT_ID, getTestnetValidators } from './wallet';
 
 // ─── Types ───
@@ -117,74 +112,37 @@ export function buildPTBFromIntent(intent: ParsedIntent, _address?: string): PTB
   };
 }
 
-// ─── Runtime TransactionBlock construction ───
-
-// Cache for the dynamically loaded TransactionBlock class
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let TransactionBlockClass: (new (...args: any[]) => any) | null = null;
+// ─── Build stake transaction ───
 
 /**
- * Dynamically import @mysten/sui.js TransactionBlock from ESM CDN.
- * This loads at runtime in the browser where native crypto APIs are available,
- * avoiding the build-time resolution issues with @noble/hashes.
+ * Build a Sui Transaction for native staking on testnet.
  *
- * We use a CORS proxy for the ESM CDN to avoid CSP issues.
- */
-async function loadTransactionBlock(): Promise<NonNullable<typeof TransactionBlockClass>> {
-  if (TransactionBlockClass) return TransactionBlockClass;
-
-  try {
-    // Import from esm.sh — the browser resolves native crypto deps at runtime
-    const mod = await import(
-      /* @vite-ignore */
-      'https://esm.sh/@mysten/sui.js@0.54.1/transactions'
-    );
-    TransactionBlockClass = mod.TransactionBlock;
-    return TransactionBlockClass!;
-  } catch (err) {
-    console.error('Failed to load TransactionBlock from ESM CDN:', err);
-    throw new Error(
-      'Could not load Sui transaction SDK. Make sure you have an internet connection. ' +
-      'The SDK is loaded on-demand from a CDN when you execute a transaction.'
-    );
-  }
-}
-
-/**
- * Build a real Sui TransactionBlock for staking.
- *
- * Dynamically loads @mysten/sui.js at runtime and constructs a proper
- * TransactionBlock that the wallet can sign and execute on testnet.
- *
- * @returns The TransactionBlock object ready for wallet.signAndExecuteTransactionBlock()
+ * Returns a Transaction with toJSON() for Slush / Wallet Standard v2 signing.
  */
 export async function buildStakeTransactionBlock(
   senderAddress: string,
   amountSui: string,
   validatorAddress?: string,
-): Promise<unknown | null> {
+): Promise<Transaction | null> {
   try {
-    const TransactionBlock = await loadTransactionBlock();
     const validator = validatorAddress ?? await getValidatorAddress();
-    const amountMist = Math.round(parseFloat(amountSui) * 1_000_000_000);
+    const amountMist = BigInt(Math.round(parseFloat(amountSui) * 1_000_000_000));
 
-    if (amountMist <= 0) {
+    if (amountMist <= 0n) {
       console.error('Invalid stake amount:', amountSui);
       return null;
     }
 
-    const tx = new TransactionBlock();
+    const tx = new Transaction();
 
-    // Split the stake amount from the gas coin
-    const stakeCoin = tx.splitCoins(tx.gas, [tx.pure(amountMist)]);
+    const stakeCoin = tx.splitCoins(tx.gas, [amountMist]);
 
-    // Request add stake to the Sui system
     tx.moveCall({
       target: '0x3::sui_system::request_add_stake',
       arguments: [
         tx.object(SUI_SYSTEM_STATE_OBJECT_ID),
         stakeCoin,
-        tx.pure(validator, 'address'),
+        tx.pure.address(validator),
       ],
     });
 
@@ -193,7 +151,7 @@ export async function buildStakeTransactionBlock(
 
     return tx;
   } catch (err) {
-    console.error('Failed to build TransactionBlock:', err);
+    console.error('Failed to build stake transaction:', err);
     return null;
   }
 }

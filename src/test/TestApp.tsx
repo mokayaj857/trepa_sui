@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { NostrLoginProvider } from '@nostrify/react/login';
 import NostrProvider from '@/components/NostrProvider';
 import { AppProvider } from '@/components/AppProvider';
+import { TrepaWalletProvider } from '@/lib/sui';
 import { AppConfig } from '@/contexts/AppContext';
 
 interface TestAppProps {
@@ -38,6 +39,7 @@ export function TestApp({ children }: TestAppProps) {
   return (
     <UnheadProvider head={head}>
       <AppProvider storageKey='test-app-config' defaultConfig={defaultConfig}>
+        <TrepaWalletProvider>
         <QueryClientProvider client={queryClient}>
           <NostrLoginProvider storageKey='test-login'>
             <NostrProvider>
@@ -47,6 +49,7 @@ export function TestApp({ children }: TestAppProps) {
             </NostrProvider>
           </NostrLoginProvider>
         </QueryClientProvider>
+        </TrepaWalletProvider>
       </AppProvider>
     </UnheadProvider>
   );

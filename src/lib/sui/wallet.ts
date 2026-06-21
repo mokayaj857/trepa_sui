@@ -1,10 +1,11 @@
 /**
- * Trepa Slush Wallet — Testnet
+ * Trepa Sui Wallet — Testnet
  *
- * Connects to Slush (the official Sui wallet by Mysten Labs) and other
- * Sui-compatible wallets via the Wallet Standard. Uses:
+ * Connects to Slush (official Sui wallet) and other Sui-compatible wallets
+ * via the Wallet Standard. Uses:
  *
  *   - @wallet-standard/core getWallets() for discovery
+ *   - @mysten/slush-wallet registerSlushWallet() for web wallet fallback
  *   - wallet.features['standard:connect'] for connecting
  *   - wallet.features['sui:signAndExecuteTransaction'] for v2 execution
  *   - wallet.features['sui:signAndExecuteTransactionBlock'] for legacy v1
@@ -16,8 +17,8 @@
  * All on-chain reads use direct JSON-RPC to Sui testnet.
  */
 
-import { useState, useCallback, useEffect, useSyncExternalStore } from 'react';
 import { getWallets } from '@wallet-standard/core';
+import { SLUSH_WALLET_NAME } from '@mysten/slush-wallet';
 
 // ─── Sui Testnet RPC ───
 
@@ -44,19 +45,30 @@ export const COIN_TYPES = {
 
 // ─── Types ───
 
+export const SUI_TESTNET_CHAIN = 'sui:testnet';
+const SLUSH_EXTENSION_ID = 'com.mystenlabs.suiwallet';
+
+export interface DetectedWallet {
+  key: string;
+  name: string;
+  icon: string;
+  id?: string;
+}
+
 export interface WalletState {
   isConnected: boolean;
   address: string | undefined;
   shortAddress: string | undefined;
   suiBalance: string;
   usdcBalance: string;
-  connect: () => Promise<void>;
+  connect: (walletKey?: string) => Promise<boolean>;
   disconnect: () => void;
   executeTransaction: (tx: unknown) => Promise<ExecutionResult>;
   isExecuting: boolean;
   walletName: string;
   network: string;
   error: string;
+  availableWallets: DetectedWallet[];
 }
 
 export interface ExecutionResult {
@@ -71,7 +83,7 @@ export interface ExecutionResult {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyRecord = Record<string, any>;
 
-interface WalletAccount {
+export interface WalletAccount {
   address: string;
   publicKey?: Uint8Array;
   chains: string[];
@@ -80,7 +92,7 @@ interface WalletAccount {
   [key: string]: any;
 }
 
-interface Wallet {
+export interface Wallet {
   name: string;
   icon: string;
   version: string;
@@ -144,54 +156,166 @@ function getRegisteredWallets(): Wallet[] {
   return wallets;
 }
 
+function getWalletKey(wallet: Wallet): string {
+  const wAny = wallet as AnyRecord;
+  if (typeof wAny.id === 'string' && wAny.id.length > 0) return wAny.id;
+  return wallet.name;
+}
+
+function isSuiCompatibleWallet(wallet: Wallet): boolean {
+  const wAny = wallet as AnyRecord;
+  if (wallet.name === SLUSH_WALLET_NAME || wAny.id === SLUSH_EXTENSION_ID) return true;
+  if (wallet.chains?.some((c: string) => c.startsWith('sui:'))) return true;
+
+  const features = wallet.features ?? {};
+  return (
+    'sui:signAndExecuteTransaction' in features ||
+    'sui:signAndExecuteTransactionBlock' in features ||
+    'sui:signTransaction' in features ||
+    'sui:signTransactionBlock' in features
+  );
+}
+
+function dedupeWallets(wallets: Wallet[]): Wallet[] {
+  const seen = new Set<string>();
+  const result: Wallet[] = [];
+  for (const wallet of wallets) {
+    const key = getWalletKey(wallet);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(wallet);
+  }
+  return result;
+}
+
+export function getSuiWallets(): Wallet[] {
+  return sortWalletsPreferSlush(
+    dedupeWallets(getRegisteredWallets().filter(isSuiCompatibleWallet)),
+  );
+}
+
+function walletPriority(wallet: Wallet): number {
+  const wAny = wallet as AnyRecord;
+  if (wallet.name === SLUSH_WALLET_NAME || wAny.id === SLUSH_EXTENSION_ID) return 3;
+  if (wallet.chains?.some((c: string) => c.startsWith('sui:'))) return 2;
+  return 1;
+}
+
+function sortWalletsPreferSlush(wallets: Wallet[]): Wallet[] {
+  return [...wallets].sort((a, b) => walletPriority(b) - walletPriority(a));
+}
+
+export function getAvailableWallets(): DetectedWallet[] {
+  return getSuiWallets().map((wallet) => {
+    const wAny = wallet as AnyRecord;
+    const key = getWalletKey(wallet);
+    return {
+      key,
+      name: wallet.name,
+      icon: wallet.icon ?? '',
+      id: typeof wAny.id === 'string' ? wAny.id : undefined,
+    };
+  });
+}
+
+export function findWalletByKey(wallets: Wallet[], walletKey: string): Wallet | undefined {
+  return wallets.find((wallet) => getWalletKey(wallet) === walletKey);
+}
+
 // ─── Connect via Wallet Standard ───
 
-async function connectStandardWallet(wallet: Wallet): Promise<WalletAccount[]> {
-  const wAny = wallet as AnyRecord;
-
+export async function connectStandardWallet(wallet: Wallet): Promise<WalletAccount[]> {
   // If the wallet already has authorized accounts, return them
   if (wallet.accounts && wallet.accounts.length > 0) {
     return [...wallet.accounts];
   }
 
-  // Try standard:connect feature
+  // Try standard:connect feature (Wallet Standard API)
   const connectFeature = wallet.features?.['standard:connect'] as AnyRecord | undefined;
   if (connectFeature && typeof connectFeature.connect === 'function') {
-    const result = await connectFeature.connect();
-    if (result?.accounts && result.accounts.length > 0) {
-      return [...result.accounts];
+    try {
+      const result = await connectFeature.connect({ silent: false });
+      if (result?.accounts && result.accounts.length > 0) {
+        return [...result.accounts];
+      }
+      if (result?.address) {
+        return [{ address: result.address, chains: [SUI_TESTNET_CHAIN], features: [] }];
+      }
+      if (Array.isArray(result) && result.length > 0) {
+        return result.map((a: { address?: string } | string) => ({
+          address: typeof a === 'string' ? a : a.address ?? '',
+          chains: [SUI_TESTNET_CHAIN],
+          features: [],
+        }));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (
+        !msg.toLowerCase().includes('reject') &&
+        !msg.toLowerCase().includes('denied') &&
+        !msg.toLowerCase().includes('cancel')
+      ) {
+        throw e;
+      }
     }
   }
 
-  // Fallback: legacy connect() method on the wallet object
-  if (typeof wAny.connect === 'function') {
-    const result = await wAny.connect();
-    if (result?.accounts && result.accounts.length > 0) {
-      return [...result.accounts];
+  // Fallback: try window.sui legacy methods directly
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const suiLegacy = typeof window !== 'undefined' ? (window as any).sui : undefined;
+  if (suiLegacy) {
+    if (typeof suiLegacy.connect === 'function') {
+      try {
+        const result = await suiLegacy.connect();
+        if (result?.accounts && result.accounts.length > 0) {
+          return [...result.accounts];
+        }
+        if (Array.isArray(result) && result.length > 0) {
+          return result.map((a: { address?: string } | string) => ({
+            address: typeof a === 'string' ? a : a.address ?? '',
+            chains: [SUI_TESTNET_CHAIN],
+            features: [],
+          }));
+        }
+        if (result?.address) {
+          return [{ address: result.address, chains: [SUI_TESTNET_CHAIN], features: [] }];
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (
+          !msg.toLowerCase().includes('reject') &&
+          !msg.toLowerCase().includes('denied') &&
+          !msg.toLowerCase().includes('cancel')
+        ) {
+          throw e;
+        }
+      }
     }
-    // Some wallets return the accounts array directly
-    if (Array.isArray(result) && result.length > 0) {
-      return [...result];
+
+    if (typeof suiLegacy.requestPermissions === 'function' && typeof suiLegacy.getAccounts === 'function') {
+      try {
+        await suiLegacy.requestPermissions();
+        const accounts = await suiLegacy.getAccounts();
+        if (Array.isArray(accounts) && accounts.length > 0) {
+          return accounts.map((a: { address?: string } | string) => ({
+            address: typeof a === 'string' ? a : a.address ?? '',
+            chains: [SUI_TESTNET_CHAIN],
+            features: [],
+          }));
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (
+          !msg.toLowerCase().includes('reject') &&
+          !msg.toLowerCase().includes('denied') &&
+          !msg.toLowerCase().includes('cancel')
+        ) {
+          throw e;
+        }
+      }
     }
   }
 
-  // Fallback: requestPermissions + getAccounts (legacy Sui Wallet)
-  if (typeof wAny.requestPermissions === 'function') {
-    await wAny.requestPermissions();
-  }
-  if (typeof wAny.getAccounts === 'function') {
-    const accounts = await wAny.getAccounts();
-    if (Array.isArray(accounts) && accounts.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return accounts.map((addr: any) => ({
-        address: typeof addr === 'string' ? addr : addr.address,
-        chains: ['sui:testnet'],
-        features: [],
-      }));
-    }
-  }
-
-  // Last check: maybe accounts got populated after connect
   if (wallet.accounts && wallet.accounts.length > 0) {
     return [...wallet.accounts];
   }
@@ -201,7 +325,7 @@ async function connectStandardWallet(wallet: Wallet): Promise<WalletAccount[]> {
 
 // ─── Check existing connection ───
 
-function getExistingAccounts(wallet: Wallet): WalletAccount[] {
+export function getExistingAccounts(wallet: Wallet): WalletAccount[] {
   // The Wallet Standard says wallets auto-restore authorized accounts
   if (wallet.accounts && wallet.accounts.length > 0) {
     return [...wallet.accounts];
@@ -211,45 +335,61 @@ function getExistingAccounts(wallet: Wallet): WalletAccount[] {
 
 // ─── Execute transaction via Wallet Standard ───
 
-async function executeViaWallet(
+interface TransactionWithToJSON {
+  toJSON: (options?: unknown) => Promise<string>;
+}
+
+function hasToJSON(tx: unknown): tx is TransactionWithToJSON {
+  return (
+    typeof tx === 'object' &&
+    tx !== null &&
+    typeof (tx as TransactionWithToJSON).toJSON === 'function'
+  );
+}
+
+export async function executeViaWallet(
   wallet: Wallet,
   account: WalletAccount,
   tx: unknown,
 ): Promise<{ digest: string }> {
   const wAny = wallet as AnyRecord;
 
-  // Try v2: sui:signAndExecuteTransaction
+  // v2: sui:signAndExecuteTransaction — requires Transaction with toJSON()
   const v2 = wAny.features?.['sui:signAndExecuteTransaction'];
-  if (v2 && typeof v2.signAndExecuteTransaction === 'function') {
+  if (v2 && typeof v2.signAndExecuteTransaction === 'function' && hasToJSON(tx)) {
     return await v2.signAndExecuteTransaction({
       transaction: tx,
       account,
-      chain: 'sui:testnet',
+      chain: SUI_TESTNET_CHAIN,
       options: { showEffects: true },
     });
   }
 
-  // Try v1 legacy: sui:signAndExecuteTransactionBlock
+  // v1: sui:signAndExecuteTransactionBlock — legacy TransactionBlock
   const v1 = wAny.features?.['sui:signAndExecuteTransactionBlock'];
   if (v1 && typeof v1.signAndExecuteTransactionBlock === 'function') {
     return await v1.signAndExecuteTransactionBlock({
       transactionBlock: tx,
       account,
-      chain: 'sui:testnet',
+      chain: SUI_TESTNET_CHAIN,
       options: { showEffects: true, showRawEffects: true },
     });
   }
 
   // Fallback: direct method on wallet object (legacy injection)
-  if (typeof wAny.signAndExecuteTransaction === 'function') {
+  if (typeof wAny.signAndExecuteTransaction === 'function' && hasToJSON(tx)) {
     return await wAny.signAndExecuteTransaction({
       transaction: tx,
+      account,
+      chain: SUI_TESTNET_CHAIN,
       options: { showEffects: true },
     });
   }
   if (typeof wAny.signAndExecuteTransactionBlock === 'function') {
     return await wAny.signAndExecuteTransactionBlock({
       transactionBlock: tx,
+      account,
+      chain: SUI_TESTNET_CHAIN,
       options: { showEffects: true, showRawEffects: true },
     });
   }
@@ -259,7 +399,7 @@ async function executeViaWallet(
 
 // ─── Disconnect via Wallet Standard ───
 
-async function disconnectWallet(wallet: Wallet): Promise<void> {
+export async function disconnectWallet(wallet: Wallet): Promise<void> {
   const wAny = wallet as AnyRecord;
 
   const disconnectFeature = wAny.features?.['standard:disconnect'];
@@ -301,7 +441,7 @@ async function fetchUsdcBalance(owner: string): Promise<string> {
   }
 }
 
-async function fetchAllTokenBalances(owner: string): Promise<{ sui: string; usdc: string }> {
+export async function fetchAllTokenBalances(owner: string): Promise<{ sui: string; usdc: string }> {
   const [sui, usdc] = await Promise.all([
     fetchSuiBalance(owner),
     fetchUsdcBalance(owner),
@@ -365,260 +505,10 @@ export async function getTestnetValidators(): Promise<string[]> {
   }
 }
 
-// ─── Hook ───
-
-// ─── External store for Wallet Standard registration events ───
-
-function subscribeToWallets(callback: () => void): () => void {
-  const wallets = getWallets();
-  const off1 = wallets.on('register', callback);
-  const off2 = wallets.on('unregister', callback);
-  return () => { off1(); off2(); };
-}
-
-function getStandardWalletsSnapshot(): number {
-  return getWallets().get().length;
-}
-
-export function useTrepaWallet(): WalletState {
-  const [address, setAddress] = useState<string | undefined>();
-  const [suiBalance, setSuiBalance] = useState('0.0000');
-  const [usdcBalance, setUsdcBalance] = useState('0.00');
-  const [isExecuting, setIsExecuting] = useState(false);
-  const [walletName, setWalletName] = useState('');
-  const [error, setError] = useState('');
-
-  // Reactive count of registered wallets — triggers re-check when wallets
-  // register/unregister (e.g. wallet extension loads after page mount)
-  const walletCount = useSyncExternalStore(subscribeToWallets, getStandardWalletsSnapshot, getStandardWalletsSnapshot);
-
-  // Keep a reference to the connected wallet object and account
-  const [connectedWallet, setConnectedWallet] = useState<Wallet | null>(null);
-  const [connectedAccount, setConnectedAccount] = useState<WalletAccount | null>(null);
-
-  // Check for existing wallet connection on mount (and when wallets change)
-  useEffect(() => {
-    let cancelled = false;
-
-    const init = async () => {
-      try {
-        const wallets = getRegisteredWallets();
-        for (const wallet of wallets) {
-          const accounts = getExistingAccounts(wallet);
-          if (accounts.length > 0) {
-            // Find a Sui account
-            const suiAccount = accounts.find((a: WalletAccount) =>
-              a.chains?.some((c: string) => c.startsWith('sui:'))
-            ) ?? accounts[0];
-
-            const addr = suiAccount.address;
-            if (!addr) continue;
-
-            if (cancelled) return;
-            setAddress(addr);
-            setWalletName(wallet.name);
-            setConnectedWallet(wallet);
-            setConnectedAccount(suiAccount);
-
-            const balances = await fetchAllTokenBalances(addr);
-            if (!cancelled) {
-              setSuiBalance(balances.sui);
-              setUsdcBalance(balances.usdc);
-            }
-            break; // Connected to first available
-          }
-        }
-      } catch {
-        // No existing connection
-      }
-    };
-
-    init();
-    return () => { cancelled = true; };
-  }, [walletCount]); // re-run when wallet count changes
-
-  // Poll balances every 15s when connected
-  useEffect(() => {
-    if (!address) return;
-    const iv = setInterval(async () => {
-      try {
-        const balances = await fetchAllTokenBalances(address);
-        setSuiBalance(balances.sui);
-        setUsdcBalance(balances.usdc);
-      } catch {
-        // Keep existing values
-      }
-    }, 15000);
-    return () => clearInterval(iv);
-  }, [address]);
-
-  // Listen for wallet account changes
-  useEffect(() => {
-    if (!connectedWallet) return;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const eventsFeature = (connectedWallet as any).features?.['standard:events'];
-    if (eventsFeature && typeof eventsFeature.on === 'function') {
-      const unsubscribe = eventsFeature.on('change', (event: { accounts?: WalletAccount[] }) => {
-        if (event.accounts && event.accounts.length > 0) {
-          const acc = event.accounts[0];
-          setAddress(acc.address);
-          setConnectedAccount(acc);
-          // Refresh balances
-          fetchAllTokenBalances(acc.address).then(b => {
-            setSuiBalance(b.sui);
-            setUsdcBalance(b.usdc);
-          }).catch(() => {});
-        } else {
-          // No more accounts — wallet disconnected externally
-          setAddress(undefined);
-          setSuiBalance('0.0000');
-          setUsdcBalance('0.00');
-          setWalletName('');
-          setConnectedWallet(null);
-          setConnectedAccount(null);
-        }
-      });
-
-      return typeof unsubscribe === 'function' ? unsubscribe : undefined;
-    }
-  }, [connectedWallet]);
-
-  const isConnected = !!address;
-  const shortAddress = address
-    ? `${address.slice(0, 6)}...${address.slice(-4)}`
-    : undefined;
-
-  const connect = useCallback(async () => {
-    setError('');
-    try {
-      const wallets = getRegisteredWallets();
-
-      if (wallets.length === 0) {
-        setError('No Slush wallet detected. Install the Slush extension and refresh this page.');
-        return;
-      }
-
-      // Use the first registered wallet
-      const wallet = wallets[0];
-      const accounts = await connectStandardWallet(wallet);
-
-      if (accounts.length === 0) {
-        setError('No accounts found. Please unlock your wallet and try again.');
-        return;
-      }
-
-      // Find a Sui-compatible account
-      const suiAccount = accounts.find((a: WalletAccount) =>
-        a.chains?.some((c: string) => c.startsWith('sui:'))
-      ) ?? accounts[0];
-
-      const addr = suiAccount.address;
-      if (!addr) {
-        setError('Could not get wallet address.');
-        return;
-      }
-
-      setAddress(addr);
-      setWalletName(wallet.name);
-      setConnectedWallet(wallet);
-      setConnectedAccount(suiAccount);
-      setError('');
-
-      const balances = await fetchAllTokenBalances(addr);
-      setSuiBalance(balances.sui);
-      setUsdcBalance(balances.usdc);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // User rejected — don't show an error, they chose to cancel
-      if (
-        msg.toLowerCase().includes('reject') ||
-        msg.toLowerCase().includes('denied') ||
-        msg.toLowerCase().includes('cancel') ||
-        msg.toLowerCase().includes('user')
-      ) {
-        return;
-      }
-      setError(`Connection failed: ${msg}`);
-    }
-  }, []);
-
-  const disconnect = useCallback(async () => {
-    if (connectedWallet) {
-      await disconnectWallet(connectedWallet);
-    }
-    setAddress(undefined);
-    setSuiBalance('0.0000');
-    setUsdcBalance('0.00');
-    setWalletName('');
-    setConnectedWallet(null);
-    setConnectedAccount(null);
-    setError('');
-  }, [connectedWallet]);
-
-  const executeTransaction = useCallback(async (tx: unknown): Promise<ExecutionResult> => {
-    setIsExecuting(true);
-    try {
-      if (!connectedWallet || !connectedAccount || !address) {
-        return {
-          success: false,
-          digest: '',
-          gasUsed: '0 SUI',
-          error: 'No wallet connected. Connect your Sui wallet first.',
-        };
-      }
-
-      const result = await executeViaWallet(connectedWallet, connectedAccount, tx);
-
-      if (result?.digest) {
-        // Wait for finality
-        await suiRpc('sui_waitForTransaction', [result.digest]);
-
-        // Get gas info
-        let gasUsed = '~0.002 SUI';
-        try {
-          const txDetails = await suiRpc('sui_getTransactionBlock', [result.digest, {
-            showEffects: true,
-          }]) as { effects?: { gasUsed?: { computationCost: string; storageCost: string; storageRebate: string } } };
-          if (txDetails.effects?.gasUsed) {
-            const g = txDetails.effects.gasUsed;
-            const totalGas = (BigInt(g.computationCost) + BigInt(g.storageCost) - BigInt(g.storageRebate));
-            gasUsed = `${Number(totalGas) / 1_000_000_000} SUI`;
-          }
-        } catch {
-          // Keep default
-        }
-
-        return { success: true, digest: result.digest, gasUsed };
-      }
-
-      return { success: false, digest: '', gasUsed: '0 SUI', error: 'No digest returned.' };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Transaction failed';
-      return { success: false, digest: '', gasUsed: '0 SUI', error: message };
-    } finally {
-      setIsExecuting(false);
-    }
-  }, [connectedWallet, connectedAccount, address]);
-
-  return {
-    isConnected,
-    address,
-    shortAddress,
-    suiBalance,
-    usdcBalance,
-    connect,
-    disconnect,
-    executeTransaction,
-    isExecuting,
-    walletName,
-    network: 'testnet',
-    error,
-  };
-}
+// ─── Availability check ───
 
 export function isSuiWalletAvailable(): boolean {
-  return typeof window !== 'undefined' && getRegisteredWallets().length > 0;
+  return typeof window !== 'undefined' && getSuiWallets().length > 0;
 }
 
 export { fetchSuiBalance, fetchUsdcBalance, suiRpc };

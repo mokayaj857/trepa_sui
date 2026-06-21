@@ -2,6 +2,9 @@ import { createRoot } from 'react-dom/client';
 
 // Import polyfills first
 import './lib/polyfills.ts';
+import { initSlushWallet } from '@/lib/sui/registerSlush';
+
+initSlushWallet();
 
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import App from './App.tsx';
