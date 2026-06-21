@@ -4,19 +4,20 @@
  * Connects to Sui wallets via the Wallet Standard (the official cross-chain
  * protocol that all Sui wallets implement). Uses:
  *
- *   - getWallets() for discovery
+ *   - @wallet-standard/core getWallets() for discovery
  *   - wallet.features['standard:connect'] for connecting
  *   - wallet.features['sui:signAndExecuteTransaction'] for v2 execution
  *   - wallet.features['sui:signAndExecuteTransactionBlock'] for legacy v1
  *   - wallet.accounts for auto-restored authorized accounts
  *
- * Also falls back to legacy injected wallets (window.suiWallet) for
- * older extensions that don't use the Wallet Standard.
+ * Also falls back to legacy injected wallets (window.sui) for older
+ * extensions.
  *
  * All on-chain reads use direct JSON-RPC to Sui testnet.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useSyncExternalStore } from 'react';
+import { getWallets } from '@wallet-standard/core';
 
 // ─── Sui Testnet RPC ───
 
@@ -65,8 +66,8 @@ export interface ExecutionResult {
   error?: string;
 }
 
-// ─── Wallet Standard Types ───
-// Minimal types for the Wallet Standard we need.
+// ─── Wallet types (compatible with Wallet Standard but mutable for internal use) ───
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyRecord = Record<string, any>;
 
@@ -85,49 +86,42 @@ interface Wallet {
   version: string;
   accounts: WalletAccount[];
   chains: string[];
-  features: AnyRecord;
+  features: Record<string, unknown>;
 }
 
 // ─── Wallet Standard Discovery ───
 
+/**
+ * Get all registered wallets via the Wallet Standard + legacy fallbacks.
+ *
+ * Primary: getWallets() from @wallet-standard/core dispatches
+ * wallet-standard:app-ready and listens for wallet-standard:register-wallet
+ * events. This handles both pre-loaded and late-loading wallets correctly.
+ *
+ * Fallback: check window.sui (Sui Wallet direct injection) for wallets
+ * that haven't migrated to the Wallet Standard event model.
+ */
 function getRegisteredWallets(): Wallet[] {
   if (typeof window === 'undefined') return [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w = window as any;
-
-  // The Wallet Standard registers wallets via getWallets()
-  // which is typically available from @wallet-standard/base
-  // But in practice, wallets also register on window.__SUI__WALLET_STANDARD__ etc.
-  // The most reliable way is to check window.walletStandard
 
   const wallets: Wallet[] = [];
 
-  // Method 1: Wallet Standard getWallets()
-  // Some dapp-kit bundles register this globally
-  if (typeof w.getWallets === 'function') {
-    try {
-      const found = w.getWallets().get();
-      if (Array.isArray(found)) {
-        wallets.push(...found);
-      }
-    } catch {
-      // getWallets() not available
+  // Method 1: Wallet Standard via @wallet-standard/core
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const standardWallets = getWallets().get() as any[];
+    for (const w of standardWallets) {
+      wallets.push(w);
     }
+  } catch {
+    // getWallets() may fail in non-browser environments
   }
 
-  // Method 2: Check window.walletStandard
-  if (w.walletStandard?.wallets && Array.isArray(w.walletStandard.wallets)) {
-    for (const wallet of w.walletStandard.wallets) {
-      if (!wallets.some(w => w.name === wallet.name)) {
-        wallets.push(wallet);
-      }
-    }
-  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any;
 
-  // Method 3: Direct wallet injection (legacy fallback)
-  // Sui Wallet injects as window.sui with Wallet Standard interface
+  // Method 2: window.sui (Sui Wallet legacy direct injection)
   if (w.sui && typeof w.sui === 'object' && !wallets.some(wl => wl.name === (w.sui.name ?? 'Sui Wallet'))) {
-    // Check if it implements Wallet Standard features
     const hasFeatures = w.sui.features && typeof w.sui.features === 'object';
     const hasAccounts = Array.isArray(w.sui.accounts);
     const hasConnect = hasFeatures && (
@@ -139,7 +133,7 @@ function getRegisteredWallets(): Wallet[] {
     }
   }
 
-  // Suiet
+  // Method 3: window.__suiet__ (Suiet legacy injection)
   if (w.__suiet__ && typeof w.__suiet__ === 'object' && !wallets.some(wl => wl.name === 'Suiet')) {
     if (w.__suiet__.features || Array.isArray(w.__suiet__.accounts) || typeof w.__suiet__.connect === 'function') {
       w.__suiet__.name = w.__suiet__.name ?? 'Suiet';
@@ -153,42 +147,43 @@ function getRegisteredWallets(): Wallet[] {
 // ─── Connect via Wallet Standard ───
 
 async function connectStandardWallet(wallet: Wallet): Promise<WalletAccount[]> {
+  const wAny = wallet as AnyRecord;
+
   // If the wallet already has authorized accounts, return them
   if (wallet.accounts && wallet.accounts.length > 0) {
-    return wallet.accounts;
+    return [...wallet.accounts];
   }
 
   // Try standard:connect feature
-  const connectFeature = wallet.features?.['standard:connect'];
+  const connectFeature = wallet.features?.['standard:connect'] as AnyRecord | undefined;
   if (connectFeature && typeof connectFeature.connect === 'function') {
     const result = await connectFeature.connect();
-    // connect() may return { accounts: WalletAccount[] }
     if (result?.accounts && result.accounts.length > 0) {
-      return result.accounts;
+      return [...result.accounts];
     }
   }
 
   // Fallback: legacy connect() method on the wallet object
-  if (typeof (wallet as AnyRecord).connect === 'function') {
-    const result = await (wallet as AnyRecord).connect();
+  if (typeof wAny.connect === 'function') {
+    const result = await wAny.connect();
     if (result?.accounts && result.accounts.length > 0) {
-      return result.accounts;
+      return [...result.accounts];
     }
     // Some wallets return the accounts array directly
     if (Array.isArray(result) && result.length > 0) {
-      return result;
+      return [...result];
     }
   }
 
   // Fallback: requestPermissions + getAccounts (legacy Sui Wallet)
-  if (typeof (wallet as AnyRecord).requestPermissions === 'function') {
-    await (wallet as AnyRecord).requestPermissions();
+  if (typeof wAny.requestPermissions === 'function') {
+    await wAny.requestPermissions();
   }
-  if (typeof (wallet as AnyRecord).getAccounts === 'function') {
-    const accounts = await (wallet as AnyRecord).getAccounts();
+  if (typeof wAny.getAccounts === 'function') {
+    const accounts = await wAny.getAccounts();
     if (Array.isArray(accounts) && accounts.length > 0) {
-      // Convert string addresses to minimal WalletAccount-like objects
-      return accounts.map((addr: string) => ({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return accounts.map((addr: any) => ({
         address: typeof addr === 'string' ? addr : addr.address,
         chains: ['sui:testnet'],
         features: [],
@@ -198,7 +193,7 @@ async function connectStandardWallet(wallet: Wallet): Promise<WalletAccount[]> {
 
   // Last check: maybe accounts got populated after connect
   if (wallet.accounts && wallet.accounts.length > 0) {
-    return wallet.accounts;
+    return [...wallet.accounts];
   }
 
   return [];
@@ -209,7 +204,7 @@ async function connectStandardWallet(wallet: Wallet): Promise<WalletAccount[]> {
 function getExistingAccounts(wallet: Wallet): WalletAccount[] {
   // The Wallet Standard says wallets auto-restore authorized accounts
   if (wallet.accounts && wallet.accounts.length > 0) {
-    return wallet.accounts;
+    return [...wallet.accounts];
   }
   return [];
 }
@@ -221,10 +216,12 @@ async function executeViaWallet(
   account: WalletAccount,
   tx: unknown,
 ): Promise<{ digest: string }> {
+  const wAny = wallet as AnyRecord;
+
   // Try v2: sui:signAndExecuteTransaction
-  const v2Feature = wallet.features?.['sui:signAndExecuteTransaction'];
-  if (v2Feature && typeof v2Feature.signAndExecuteTransaction === 'function') {
-    return await v2Feature.signAndExecuteTransaction({
+  const v2 = wAny.features?.['sui:signAndExecuteTransaction'];
+  if (v2 && typeof v2.signAndExecuteTransaction === 'function') {
+    return await v2.signAndExecuteTransaction({
       transaction: tx,
       account,
       chain: 'sui:testnet',
@@ -233,9 +230,9 @@ async function executeViaWallet(
   }
 
   // Try v1 legacy: sui:signAndExecuteTransactionBlock
-  const v1Feature = wallet.features?.['sui:signAndExecuteTransactionBlock'];
-  if (v1Feature && typeof v1Feature.signAndExecuteTransactionBlock === 'function') {
-    return await v1Feature.signAndExecuteTransactionBlock({
+  const v1 = wAny.features?.['sui:signAndExecuteTransactionBlock'];
+  if (v1 && typeof v1.signAndExecuteTransactionBlock === 'function') {
+    return await v1.signAndExecuteTransactionBlock({
       transactionBlock: tx,
       account,
       chain: 'sui:testnet',
@@ -244,16 +241,14 @@ async function executeViaWallet(
   }
 
   // Fallback: direct method on wallet object (legacy injection)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w = wallet as any;
-  if (typeof w.signAndExecuteTransaction === 'function') {
-    return await w.signAndExecuteTransaction({
+  if (typeof wAny.signAndExecuteTransaction === 'function') {
+    return await wAny.signAndExecuteTransaction({
       transaction: tx,
       options: { showEffects: true },
     });
   }
-  if (typeof w.signAndExecuteTransactionBlock === 'function') {
-    return await w.signAndExecuteTransactionBlock({
+  if (typeof wAny.signAndExecuteTransactionBlock === 'function') {
+    return await wAny.signAndExecuteTransactionBlock({
       transactionBlock: tx,
       options: { showEffects: true, showRawEffects: true },
     });
@@ -265,7 +260,9 @@ async function executeViaWallet(
 // ─── Disconnect via Wallet Standard ───
 
 async function disconnectWallet(wallet: Wallet): Promise<void> {
-  const disconnectFeature = wallet.features?.['standard:disconnect'];
+  const wAny = wallet as AnyRecord;
+
+  const disconnectFeature = wAny.features?.['standard:disconnect'];
   if (disconnectFeature && typeof disconnectFeature.disconnect === 'function') {
     try {
       await disconnectFeature.disconnect();
@@ -275,10 +272,8 @@ async function disconnectWallet(wallet: Wallet): Promise<void> {
     return;
   }
   // Fallback: direct method
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w = wallet as any;
-  if (typeof w.disconnect === 'function') {
-    try { await w.disconnect(); } catch { /* ignore */ }
+  if (typeof wAny.disconnect === 'function') {
+    try { await wAny.disconnect(); } catch { /* ignore */ }
   }
 }
 
@@ -372,6 +367,19 @@ export async function getTestnetValidators(): Promise<string[]> {
 
 // ─── Hook ───
 
+// ─── External store for Wallet Standard registration events ───
+
+function subscribeToWallets(callback: () => void): () => void {
+  const wallets = getWallets();
+  const off1 = wallets.on('register', callback);
+  const off2 = wallets.on('unregister', callback);
+  return () => { off1(); off2(); };
+}
+
+function getStandardWalletsSnapshot(): number {
+  return getWallets().get().length;
+}
+
 export function useTrepaWallet(): WalletState {
   const [address, setAddress] = useState<string | undefined>();
   const [suiBalance, setSuiBalance] = useState('0.0000');
@@ -380,14 +388,15 @@ export function useTrepaWallet(): WalletState {
   const [walletName, setWalletName] = useState('');
   const [error, setError] = useState('');
 
+  // Reactive count of registered wallets — triggers re-check when wallets
+  // register/unregister (e.g. wallet extension loads after page mount)
+  const walletCount = useSyncExternalStore(subscribeToWallets, getStandardWalletsSnapshot, getStandardWalletsSnapshot);
+
   // Keep a reference to the connected wallet object and account
-  // These are NOT React state because they're mutable objects from the wallet extension
-  // that we don't control — putting them in state causes stale reference issues
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   const [connectedWallet, setConnectedWallet] = useState<Wallet | null>(null);
   const [connectedAccount, setConnectedAccount] = useState<WalletAccount | null>(null);
 
-  // Check for existing wallet connection on mount
+  // Check for existing wallet connection on mount (and when wallets change)
   useEffect(() => {
     let cancelled = false;
 
@@ -426,7 +435,7 @@ export function useTrepaWallet(): WalletState {
 
     init();
     return () => { cancelled = true; };
-  }, []);
+  }, [walletCount]); // re-run when wallet count changes
 
   // Poll balances every 15s when connected
   useEffect(() => {
@@ -447,7 +456,8 @@ export function useTrepaWallet(): WalletState {
   useEffect(() => {
     if (!connectedWallet) return;
 
-    const eventsFeature = connectedWallet.features?.['standard:events'];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const eventsFeature = (connectedWallet as any).features?.['standard:events'];
     if (eventsFeature && typeof eventsFeature.on === 'function') {
       const unsubscribe = eventsFeature.on('change', (event: { accounts?: WalletAccount[] }) => {
         if (event.accounts && event.accounts.length > 0) {
@@ -470,7 +480,7 @@ export function useTrepaWallet(): WalletState {
         }
       });
 
-      return unsubscribe;
+      return typeof unsubscribe === 'function' ? unsubscribe : undefined;
     }
   }, [connectedWallet]);
 
