@@ -130,8 +130,8 @@ export default function TreasuryDashboard() {
               <CardContent className="p-5 flex items-center gap-3">
                 <Wallet className="h-5 w-5 text-primary flex-shrink-0" />
                 <div className="flex-1">
-                  <p className="text-sm font-medium">Connect your Sui wallet</p>
-                  <p className="text-xs text-muted-foreground">Connect a wallet with testnet SUI to view your real on-chain balances.</p>
+                  <p className="text-sm font-medium">Connect your Slush wallet</p>
+                  <p className="text-xs text-muted-foreground">Connect Slush (or any Sui wallet) with testnet SUI to view your real on-chain balances.</p>
                 </div>
                 <a href="https://faucet.sui.io" target="_blank" rel="noopener noreferrer">
                   <Button variant="outline" size="sm" className="text-xs gap-1">

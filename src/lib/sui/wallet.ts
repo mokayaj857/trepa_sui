@@ -1,8 +1,8 @@
 /**
- * Trepa Sui Wallet — Testnet
+ * Trepa Slush Wallet — Testnet
  *
- * Connects to Sui wallets via the Wallet Standard (the official cross-chain
- * protocol that all Sui wallets implement). Uses:
+ * Connects to Slush (the official Sui wallet by Mysten Labs) and other
+ * Sui-compatible wallets via the Wallet Standard. Uses:
  *
  *   - @wallet-standard/core getWallets() for discovery
  *   - wallet.features['standard:connect'] for connecting
@@ -120,7 +120,7 @@ function getRegisteredWallets(): Wallet[] {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any;
 
-  // Method 2: window.sui (Sui Wallet legacy direct injection)
+  // Method 2: window.sui (Slush/Sui Wallet legacy direct injection)
   if (w.sui && typeof w.sui === 'object' && !wallets.some(wl => wl.name === (w.sui.name ?? 'Sui Wallet'))) {
     const hasFeatures = w.sui.features && typeof w.sui.features === 'object';
     const hasAccounts = Array.isArray(w.sui.accounts);
@@ -495,7 +495,7 @@ export function useTrepaWallet(): WalletState {
       const wallets = getRegisteredWallets();
 
       if (wallets.length === 0) {
-        setError('No Sui wallet detected. Install the Sui Wallet extension and refresh this page.');
+        setError('No Slush wallet detected. Install the Slush extension and refresh this page.');
         return;
       }
 

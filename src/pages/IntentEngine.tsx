@@ -162,7 +162,7 @@ export default function IntentEngine() {
       }), 400);
       setTimeout(() => {
         clearInterval(iv);
-        setExecError('No Sui wallet connected. Install a Sui wallet extension (like Sui Wallet) and switch to Testnet to execute real transactions.');
+        setExecError('No Slush wallet connected. Install the Slush extension and switch to Testnet to execute real transactions.');
         setStep('done');
       }, 1000);
       return;
@@ -253,7 +253,7 @@ export default function IntentEngine() {
               {wallet.isConnected ? (
                 <span>Wallet connected — <span className="text-primary font-medium">{wallet.shortAddress}</span> · On-chain execution enabled on testnet.</span>
               ) : (
-                <span>Connect a Sui wallet for real on-chain execution on testnet, or explore the flow in demo mode.</span>
+                <span>Connect Slush for real on-chain execution on testnet, or explore the flow in demo mode.</span>
               )}
               {!wallet.isConnected && (
                 <a href="https://faucet.sui.io" target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 text-primary hover:underline">
