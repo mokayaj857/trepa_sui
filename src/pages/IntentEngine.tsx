@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
-import { parseUserIntent, buildPTBFromIntent, buildStakeTransactionBlock, runGuardianChecks, getSeverityBg, useTrepaWallet } from '@/lib/sui';
+import { parseUserIntent, buildPTBFromIntent, buildStakeTransactionBlock, validateStakeAmount, formatSuiTransactionError, runGuardianChecks, getSeverityBg, useTrepaWallet } from '@/lib/sui';
 import type { ParsedIntent, PTBResult, GuardianReport } from '@/lib/sui';
 import {
   Bot,
@@ -186,7 +186,15 @@ export default function IntentEngine() {
       let tx: unknown = null;
 
       if (stakeAction && wallet.address) {
-        // Build a real staking transaction
+        const stakeValidation = validateStakeAmount(stakeAction.amount, wallet.suiBalance);
+        if (stakeValidation) {
+          clearInterval(progressIv);
+          setExecStep(3);
+          setExecError(stakeValidation);
+          setTimeout(() => setStep('done'), 800);
+          return;
+        }
+
         tx = await buildStakeTransactionBlock(
           wallet.address,
           stakeAction.amount,
@@ -203,7 +211,7 @@ export default function IntentEngine() {
       if (!tx) {
         clearInterval(progressIv);
         setExecStep(3);
-        setExecError('Could not build on-chain transaction. Currently, only staking intents are supported for on-chain execution. Try "Stake X SUI" as your intent.');
+        setExecError('Could not build on-chain transaction. Stake at least 1 SUI on testnet (e.g. "Stake 1 SUI").');
         setTimeout(() => setStep('done'), 800);
         return;
       }
@@ -220,13 +228,13 @@ export default function IntentEngine() {
         setTimeout(() => setStep('done'), 800);
       } else {
         setExecStep(3);
-        setExecError(result.error || 'Transaction failed');
+        setExecError(formatSuiTransactionError(result.error || 'Transaction failed'));
         setTimeout(() => setStep('done'), 800);
       }
     } catch (err) {
       clearInterval(progressIv);
       setExecStep(3);
-      setExecError(err instanceof Error ? err.message : 'Execution failed unexpectedly');
+      setExecError(formatSuiTransactionError(err instanceof Error ? err.message : 'Execution failed unexpectedly'));
       setTimeout(() => setStep('done'), 800);
     }
   }, [ptbResult, parsed, wallet.isConnected, wallet.address, wallet.executeTransaction]);

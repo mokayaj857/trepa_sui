@@ -40,9 +40,51 @@ export interface PTBResult {
   gasBudget: string;
 }
 
-// ─── Default validator for testnet staking ───
+// ─── Staking limits (Sui testnet) ───
 
-const DEFAULT_TESTNET_VALIDATOR = '0x4796e6e8e3569516e3b94d7b46e4f5051a0a72b53e0eb65d0fdd9c8d0a1d2c8a';
+/** Minimum delegator stake: 1 SUI (MIN_STAKING_THRESHOLD on-chain). */
+export const MIN_STAKE_SUI = 1;
+export const MIN_STAKE_MIST = 1_000_000_000n;
+/** Reserve for gas on top of the stake amount. */
+export const STAKE_GAS_RESERVE_SUI = 0.05;
+
+const DEFAULT_TESTNET_VALIDATOR = '0x44b1b319e23495995fc837dafd28fc6af8b645edddff0fc1467f1ad631362c23';
+
+export function validateStakeAmount(
+  amountSui: string,
+  walletBalanceSui?: string,
+): string | null {
+  const amount = parseFloat(amountSui);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return 'Enter a valid stake amount in SUI.';
+  }
+
+  const amountMist = BigInt(Math.round(amount * 1_000_000_000));
+  if (amountMist < MIN_STAKE_MIST) {
+    return `Minimum stake on Sui testnet is ${MIN_STAKE_SUI} SUI (you entered ${amountSui} SUI). Try "Stake 1 SUI" or more.`;
+  }
+
+  if (walletBalanceSui) {
+    const balance = parseFloat(walletBalanceSui);
+    const required = amount + STAKE_GAS_RESERVE_SUI;
+    if (Number.isFinite(balance) && balance < required) {
+      return `Insufficient testnet SUI. Need ~${required.toFixed(2)} SUI (${amountSui} stake + gas). Your balance: ${walletBalanceSui} SUI.`;
+    }
+  }
+
+  return null;
+}
+
+export function formatSuiTransactionError(message: string): string {
+  if (
+    message.includes('EStakingBelowThreshold') ||
+    /request_add_stake.*\}, 10\)/.test(message) ||
+    /MoveAbort\([^)]*request_add_stake[^)]*, 10\)/.test(message)
+  ) {
+    return `Stake amount is below the Sui testnet minimum of ${MIN_STAKE_SUI} SUI. Use at least 1 full SUI (e.g. "Stake 1 SUI").`;
+  }
+  return message;
+}
 
 /**
  * Fetch the first available validator address from the Sui testnet.
@@ -125,11 +167,16 @@ export async function buildStakeTransactionBlock(
   validatorAddress?: string,
 ): Promise<Transaction | null> {
   try {
+    const stakeError = validateStakeAmount(amountSui);
+    if (stakeError) {
+      console.error(stakeError);
+      return null;
+    }
+
     const validator = validatorAddress ?? await getValidatorAddress();
     const amountMist = BigInt(Math.round(parseFloat(amountSui) * 1_000_000_000));
 
-    if (amountMist <= 0n) {
-      console.error('Invalid stake amount:', amountSui);
+    if (amountMist < MIN_STAKE_MIST) {
       return null;
     }
 

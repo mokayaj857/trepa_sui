@@ -1,4 +1,4 @@
-export { parseUserIntent, buildPTBFromIntent, buildStakeTransactionBlock } from './ptbBuilder';
+export { parseUserIntent, buildPTBFromIntent, buildStakeTransactionBlock, validateStakeAmount, formatSuiTransactionError, MIN_STAKE_SUI, MIN_STAKE_MIST, STAKE_GAS_RESERVE_SUI } from './ptbBuilder';
 export type { ParsedIntent, IntentAction, IntentActionType, PTBResult } from './ptbBuilder';
 export { runGuardianChecks, getSeverityColor, getSeverityBg } from './guardian';
 export type { RiskCheck, RiskSeverity, GuardianReport } from './guardian';

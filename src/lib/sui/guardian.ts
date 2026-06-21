@@ -9,6 +9,7 @@
  */
 
 import type { IntentAction, ParsedIntent } from './ptbBuilder';
+import { MIN_STAKE_SUI, validateStakeAmount } from './ptbBuilder';
 import { COIN_TYPES, suiRpc } from './wallet';
 
 // ─── Types ───
@@ -50,6 +51,44 @@ async function getRealUsdcBalance(address: string): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+// ─── Risk Check: Minimum stake ───
+
+function checkMinStake(actions: IntentAction[], _address: string | undefined): RiskCheck {
+  const stakeAction = actions.find(a => a.type === 'stake');
+  if (!stakeAction) {
+    return {
+      id: 'min_stake',
+      type: 'liquidity',
+      severity: 'low',
+      title: 'Minimum Stake',
+      description: 'No staking action in this intent.',
+      detail: 'N/A',
+    };
+  }
+
+  const validationError = validateStakeAmount(stakeAction.amount);
+  if (validationError) {
+    return {
+      id: 'min_stake',
+      type: 'liquidity',
+      severity: 'critical',
+      title: 'Below Minimum Stake',
+      description: validationError,
+      detail: `Sui requires at least ${MIN_STAKE_SUI} SUI per stake on testnet.`,
+      recommendation: `Use "Stake ${MIN_STAKE_SUI} SUI" or higher.`,
+    };
+  }
+
+  return {
+    id: 'min_stake',
+    type: 'liquidity',
+    severity: 'low',
+    title: 'Minimum Stake',
+    description: `Stake amount meets the ${MIN_STAKE_SUI} SUI testnet minimum.`,
+    detail: `${stakeAction.amount} SUI`,
+  };
 }
 
 // ─── Risk Check Implementations ───
@@ -290,6 +329,7 @@ export async function runGuardianChecks(
   const checks: RiskCheck[] = await Promise.all([
     checkSlippage(actions, intent, address),
     Promise.resolve(checkConcentration(actions, intent)),
+    Promise.resolve(checkMinStake(actions, address)),
     checkLiquidity(actions, intent, address),
     checkTreasuryBudget(actions, address),
   ]);
