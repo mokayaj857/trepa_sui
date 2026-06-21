@@ -505,7 +505,27 @@ export async function getTestnetValidators(): Promise<string[]> {
   }
 }
 
-// ─── Availability check ───
+export async function fetchTransactionGasUsed(digest: string): Promise<string> {
+  try {
+    const txDetails = (await suiRpc('sui_getTransactionBlock', [
+      digest,
+      { showEffects: true },
+    ])) as {
+      effects?: {
+        gasUsed?: { computationCost: string; storageCost: string; storageRebate: string };
+      };
+    };
+    if (txDetails.effects?.gasUsed) {
+      const g = txDetails.effects.gasUsed;
+      const totalGas =
+        BigInt(g.computationCost) + BigInt(g.storageCost) - BigInt(g.storageRebate);
+      return `${Number(totalGas) / 1_000_000_000} SUI`;
+    }
+  } catch {
+    // Fall through to default
+  }
+  return '~0.002 SUI';
+}
 
 export function isSuiWalletAvailable(): boolean {
   return typeof window !== 'undefined' && getSuiWallets().length > 0;

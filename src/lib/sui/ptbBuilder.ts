@@ -83,6 +83,9 @@ export function formatSuiTransactionError(message: string): string {
   ) {
     return `Stake amount is below the Sui testnet minimum of ${MIN_STAKE_SUI} SUI. Use at least 1 full SUI (e.g. "Stake 1 SUI").`;
   }
+  if (message.includes('Method not found')) {
+    return 'RPC method unavailable on testnet. If Slush showed success, check your wallet history or suiscan.xyz testnet for the transaction.';
+  }
   return message;
 }
 

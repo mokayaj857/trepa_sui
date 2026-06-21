@@ -15,11 +15,11 @@ import {
   disconnectWallet,
   executeViaWallet,
   fetchAllTokenBalances,
+  fetchTransactionGasUsed,
   findWalletByKey,
   getAvailableWallets,
   getExistingAccounts,
   getSuiWallets,
-  suiRpc,
   type Wallet,
   type WalletAccount,
 } from './wallet';
@@ -228,27 +228,14 @@ export function TrepaWalletProvider({ children }: { children: ReactNode }) {
         const result = await executeViaWallet(connectedWallet, connectedAccount, tx);
 
         if (result?.digest) {
-          await suiRpc('sui_waitForTransaction', [result.digest]);
+          // Slush signAndExecuteTransaction already executes on-chain; the testnet
+          // fullnode does not expose sui_waitForTransaction.
+          const gasUsed = await fetchTransactionGasUsed(result.digest);
 
-          let gasUsed = '~0.002 SUI';
-          try {
-            const txDetails = (await suiRpc('sui_getTransactionBlock', [
-              result.digest,
-              { showEffects: true },
-            ])) as {
-              effects?: {
-                gasUsed?: { computationCost: string; storageCost: string; storageRebate: string };
-              };
-            };
-            if (txDetails.effects?.gasUsed) {
-              const g = txDetails.effects.gasUsed;
-              const totalGas =
-                BigInt(g.computationCost) + BigInt(g.storageCost) - BigInt(g.storageRebate);
-              gasUsed = `${Number(totalGas) / 1_000_000_000} SUI`;
-            }
-          } catch {
-            // Keep default
-          }
+          void fetchAllTokenBalances(address).then((balances) => {
+            setSuiBalance(balances.sui);
+            setUsdcBalance(balances.usdc);
+          });
 
           return { success: true, digest: result.digest, gasUsed };
         }
